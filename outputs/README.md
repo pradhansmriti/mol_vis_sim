@@ -37,5 +37,7 @@ Provide one end-to-end ubiquitin example: structure input, inspectable plan and 
 NAMD tutorial, Unix/MacOSX, April 2017 (proposed baseline):
 https://www.ks.uiuc.edu/Training/Tutorials/namd/namd-tutorial-html/
 
-## Next session
-First step: create a GitHub remote repository, connect this local repository, and push the existing design commit(s). The user requested that this be done when work resumes, not now. Then continue implementation planning from the saved workspace design.
+## Repository and next step
+The project is connected to [pradhansmriti/mol_vis_sim](https://github.com/pradhansmriti/mol_vis_sim).
+
+Next: continue implementation planning from the saved workspace design.
