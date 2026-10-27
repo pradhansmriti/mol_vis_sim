@@ -35,7 +35,23 @@ python3 -m venv .prep-env
 
 Alternatively use `conda env create -f environment.yml` and `conda run -n molvis python -m molvis`. The source dependency is version/hash pinned. The conda recipe builds from source so it can support platforms without a prebuilt psfgen package. For a separate preparation interpreter, set `MOLVIS_PREP_PYTHON` to its absolute Python path before starting the server. Browser users need no VMD installation; a hosted deployment must install the library on its server.
 
-Generation runs in a temporary directory in an isolated worker process with a 120-second timeout. Temporary inputs and outputs are removed after each request; uploaded pair validation uses memory. Each file is limited to 5 MB, the request to 30 MB, and topology/parameter uploads to 12 files of each kind. Topology and parameter data are not executed as scripts. The server remains bound to loopback.
+Generation runs in a temporary scratch directory in an isolated worker process with a 120-second timeout. After a successful pair check, both generation and upload routes persist their files in a unique folder:
+
+```text
+mol_vis_sim/runs/preparations/<preparation-id>/
+  prepared.pdb
+  prepared.psf
+  manifest.json
+  preparation.zip
+  source.pdb          # original input, for generated pairs
+  psfgen.log          # for generated pairs
+  topologies/        # supplied topology files, for generation
+  parameters/        # supplied parameter files, when provided
+```
+
+The interface shows the absolute server folder after preparation, and the response and manifest record the paths. Each preparation gets a new ID; earlier outputs are not overwritten. Files survive closing the page or restarting the server. They are excluded from Git and remain until manually removed. **Download PDB**, **Download PSF**, **Download manifest**, and **Download all files (ZIP)** serve the saved files directly, saving additional copies to the browser's configured download location. Download URLs are included in the response/manifest and remain usable while the server is running with the same output root and files are retained. In the current local setup, the server folder is on your computer; in a hosted deployment, it would be on the server.
+
+The default root is `<repository>/runs/preparations`, independent of the launch directory. Set `MOLVIS_OUTPUT_DIR` before starting the server to use a different root. The server must have write access. Results are published only when the complete folder has been saved; a write failure returns an error rather than claiming success. Temporary scratch files are removed after each request. Each input file is limited to 5 MB, the request to 30 MB, and topology/parameter uploads to 12 files of each kind. Topology and parameter data are not executed as scripts. The server remains bound to loopback.
 
 This implementation supports preparation, planning and structure inspection. It does not interpret natural-language requests, validate a complete simulation parameter set, or execute OpenMM. Temperature/energy data and trajectory controls will become available with the runner. A parsed PDB is not a scientifically validated structure. Multiple models, alternate locations, and duplicate atoms require explicit resolution; non-protein components are retained in existing pairs and flagged for review. mmCIF is not yet supported.
 

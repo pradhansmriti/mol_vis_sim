@@ -14,6 +14,7 @@ const preparationInputs = new Set(['pdb','psf','topologies','parameters','histid
 $('plan-form').addEventListener('input', event => {
   if (preparationInputs.has(event.target.id)) {
     prepared = null; $('prep-downloads').hidden = true;
+    $('prep-location').hidden = true;
     $('prep-status').textContent = 'Inputs changed. Prepare the files again.';
   }
   invalidate(); $('propose').disabled = !prepared || preparing;
@@ -36,6 +37,7 @@ async function readFiles(id) {
 $('prepare').addEventListener('click', async () => {
   $('error').textContent = ''; prepared = null; invalidate();
   $('prep-downloads').hidden = true;
+  $('prep-location').hidden = true;
   const submittedRevision = revision, mode = $('prep-mode').value;
   const options = {histidine:$('histidine').value,first:$('first-patch').value,last:$('last-patch').value};
   const confirm_guess = $('confirm-guess').checked;
@@ -54,6 +56,8 @@ $('prepare').addEventListener('click', async () => {
     if (!response.ok) throw Error(result.error || 'Preparation failed.');
     prepared = result; pdb = result.pdb; yaw = pitch = 0; zoom = 1;
     $('prep-downloads').hidden = false;
+    $('prep-location').textContent = `Saved on the server: ${result.storage.directory} — prepared.pdb, prepared.psf, manifest.json and preparation.zip. Files remain after this page closes. Browser downloads are separate copies saved to your browser’s download location.`;
+    $('prep-location').hidden = false;
     $('prep-status').textContent = `${result.structure.atom_count} atoms · pair checked. Review coordinates and force-field parameters before simulation.`;
     $('structure-info').textContent = `${result.structure.atom_count} atoms · ${result.structure.residue_count} residues`;
     $('status').textContent = 'Files prepared';
@@ -68,9 +72,15 @@ function download(name, content, mime='text/plain') {
   const a = document.createElement('a'); a.href = url; a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-$('download-pdb').onclick = () => prepared && download('prepared.pdb',prepared.pdb);
-$('download-psf').onclick = () => prepared && download('prepared.psf',prepared.psf);
-$('download-bundle').onclick = () => prepared && download('preparation.zip', Uint8Array.from(atob(prepared.bundle_base64), c => c.charCodeAt(0)), 'application/zip');
+function downloadSaved(name) {
+  if (!prepared) return;
+  const a = document.createElement('a');
+  a.href = prepared.storage.download_urls[name]; a.download = name; a.click();
+}
+$('download-pdb').onclick = () => downloadSaved('prepared.pdb');
+$('download-psf').onclick = () => downloadSaved('prepared.psf');
+$('download-manifest').onclick = () => downloadSaved('manifest.json');
+$('download-bundle').onclick = () => downloadSaved('preparation.zip');
 $('pdb').addEventListener('change', async () => {
   invalidate(); pdb = ''; const file = $('pdb').files[0];
   $('filename').textContent = file ? file.name : 'Local PDB · max 5 MB';

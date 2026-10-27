@@ -2,7 +2,10 @@ import base64
 import importlib.util
 import io
 import json
+import os
+from pathlib import Path
 import subprocess
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -48,7 +51,16 @@ def generation_payload():
                 confirm_guess=True, options=dict(first='NONE', last='NONE', histidine='HSE'))
 
 
-class PairTests(unittest.TestCase):
+class StorageIsolation:
+    def setUp(self):
+        self.output = TemporaryDirectory()
+        self.addCleanup(self.output.cleanup)
+        env = patch.dict(os.environ, {'MOLVIS_OUTPUT_DIR': self.output.name})
+        env.start()
+        self.addCleanup(env.stop)
+
+
+class PairTests(StorageIsolation, unittest.TestCase):
     def test_upload_preserves_pair_and_parameters(self):
         result = prepare(dict(mode='upload', pdb=PDB, psf=PSF,
                               parameters=[dict(name='test.prm',text='* test parameters')]))
@@ -59,6 +71,25 @@ class PairTests(unittest.TestCase):
             self.assertEqual(bundle.read('prepared.psf').decode(), PSF)
             self.assertEqual(bundle.read('parameters/0-test.prm').decode(), '* test parameters')
             self.assertEqual(json.loads(bundle.read('manifest.json'))['pair']['atom_count'],4)
+
+    def test_outputs_persist_and_preparations_do_not_overwrite(self):
+        payload = dict(mode='upload',pdb=PDB,psf=PSF)
+        first, second = prepare(payload), prepare(payload)
+        self.assertNotEqual(first['storage']['directory'],second['storage']['directory'])
+        saved = Path(first['storage']['directory'])
+        self.assertEqual(saved.parent,Path(self.output.name).resolve())
+        self.assertEqual((saved/'prepared.pdb').read_text(),PDB)
+        self.assertEqual((saved/'prepared.psf').read_text(),PSF)
+        self.assertEqual(json.loads((saved/'manifest.json').read_text())['storage'],first['storage'])
+        self.assertEqual((saved/'preparation.zip').read_bytes(),base64.b64decode(first['bundle_base64']))
+        self.assertFalse(list(Path(self.output.name).glob('.pending-*')))
+
+    def test_storage_failure_is_not_reported_as_success(self):
+        blocker = Path(self.output.name)/'not-a-folder'
+        blocker.write_text('occupied')
+        with patch.dict(os.environ, {'MOLVIS_OUTPUT_DIR':str(blocker)}):
+            with self.assertRaisesRegex(ValueError,'Could not save preparation files'):
+                prepare(dict(mode='upload',pdb=PDB,psf=PSF))
 
     def test_reject_mismatched_pair(self):
         for psf in (PSF.replace('4 !NATOM','3 !NATOM'), PSF.replace('ALA N N','ALA O N'),
@@ -95,12 +126,16 @@ class PairTests(unittest.TestCase):
 
 
 @unittest.skipUnless(importlib.util.find_spec('psfgen'), 'Standalone psfgen is not installed in this Python environment')
-class NativePreparationTests(unittest.TestCase):
+class NativePreparationTests(StorageIsolation, unittest.TestCase):
     def test_real_psfgen_generation_and_round_trip(self):
         result = prepare(generation_payload())
         self.assertEqual(result['structure']['atom_count'],5)
         self.assertIn('HN',[a['name'] for a in result['structure']['atoms']])
         self.assertEqual(result['manifest']['details']['engine']['version'],'1.0.5')
+        saved = Path(result['storage']['directory'])
+        self.assertEqual((saved/'source.pdb').read_text(),PDB)
+        self.assertEqual((saved/'topologies'/'0-test.rtf').read_text(),RTF)
+        self.assertTrue((saved/'psfgen.log').is_file())
         with zipfile.ZipFile(io.BytesIO(base64.b64decode(result['bundle_base64']))) as bundle:
             self.assertEqual(bundle.read('source.pdb').decode(),PDB)
         uploaded = prepare(dict(mode='upload',pdb=result['pdb'],psf=result['psf']))

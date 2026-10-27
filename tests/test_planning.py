@@ -1,5 +1,8 @@
 import json
 import importlib.util
+import os
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 import threading
 import unittest
 from http.client import HTTPConnection
@@ -51,6 +54,11 @@ class PlanningTests(unittest.TestCase):
 class ServerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.output = TemporaryDirectory()
+        cls.addClassCleanup(cls.output.cleanup)
+        env = patch.dict(os.environ, {'MOLVIS_OUTPUT_DIR':cls.output.name})
+        env.start()
+        cls.addClassCleanup(env.stop)
         cls.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -93,6 +101,25 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(json.loads(data)['preparation']['pair']['atom_count'],4)
         self.assertEqual(self.request('POST', '/api/prepare', json.dumps(dict(mode='upload',pdb=PDB,psf='bad')))[0],400)
         self.assertEqual(self.request('POST', '/api/prepare', '{}', {'Origin':'https://example.com'})[0],403)
+
+    def test_direct_downloads_match_persistent_files(self):
+        status, data = self.request('POST', '/api/prepare', json.dumps(dict(mode='upload',pdb=PDB,psf=PSF)))
+        self.assertEqual(status,200)
+        result = json.loads(data)
+        urls = result['storage']['download_urls']
+        self.assertEqual(self.request('GET',urls['prepared.pdb']),(200,PDB.encode()))
+        self.assertEqual(self.request('GET',urls['prepared.psf']),(200,PSF.encode()))
+        self.assertEqual(json.loads(self.request('GET',urls['manifest.json'])[1]),result['manifest'])
+        connection = HTTPConnection('127.0.0.1',self.server.server_port)
+        connection.request('GET',urls['preparation.zip'])
+        response = connection.getresponse()
+        self.assertEqual(response.status,200)
+        self.assertEqual(response.getheader('Content-Disposition'),'attachment; filename="preparation.zip"')
+        self.assertEqual(response.getheader('Content-Type'),'application/zip')
+        self.assertTrue(response.read().startswith(b'PK'))
+        connection.close()
+        self.assertEqual(self.request('GET',urls['prepared.pdb'].replace('prepared.pdb','../../README.md'))[0],404)
+        self.assertEqual(self.request('GET','/api/preparations/00000000-0000-0000-0000-000000000000/files/prepared.pdb')[0],404)
 
     @unittest.skipUnless(importlib.util.find_spec('psfgen'), 'Standalone psfgen is not installed')
     def test_native_generation_endpoint(self):

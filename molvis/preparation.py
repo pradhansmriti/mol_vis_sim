@@ -11,11 +11,16 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import zipfile
+from uuid import uuid4
 
 from .planning import inspect_pdb
 
 LIMIT = 5_000_000
 PROTEIN = set('ALA ARG ASN ASP CYS GLN GLU GLY HIS HSD HSE HSP ILE LEU LYS MET PHE PRO SER THR TRP TYR VAL'.split())
+
+
+def output_root():
+    return Path(os.environ.get('MOLVIS_OUTPUT_DIR', str(Path(__file__).resolve().parent.parent / 'runs' / 'preparations'))).expanduser().resolve()
 
 
 def digest(text):
@@ -173,7 +178,16 @@ def prepare(payload):
 
 
 def preparation_result(pdb, psf, mode, parameters, pair, detail, topologies, source_pdb=None):
+    preparation_id = str(uuid4())
+    root = output_root()
+    destination = root / preparation_id
+    storage = dict(id=preparation_id, directory=str(destination),
+                   pdb=str(destination / 'prepared.pdb'), psf=str(destination / 'prepared.psf'),
+                   manifest=str(destination / 'manifest.json'), bundle=str(destination / 'preparation.zip'),
+                   download_urls={name: f'/api/preparations/{preparation_id}/files/{name}'
+                                  for name in ('prepared.pdb', 'prepared.psf', 'manifest.json', 'preparation.zip')})
     manifest = dict(mode=mode, state='pair_checked', pair=pair, details=detail,
+                    storage=storage,
                     parameters=[dict(name=f['name'], sha256=digest(f['text'])) for f in parameters],
                     simulation_ready=False,
                     notes=['Review generated coordinates and all protonation/termini choices.',
@@ -191,5 +205,21 @@ def preparation_result(pdb, psf, mode, parameters, pair, detail, topologies, sou
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:
         for name, text in files.items():
             bundle.writestr(name, text)
+    # Publish a complete folder only after every file has been written. Failures
+    # leave no successful-looking result, and unique IDs prevent overwrites.
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(prefix='.pending-', dir=root) as staging:
+            stage = Path(staging) / 'result'
+            stage.mkdir()
+            for name, text in files.items():
+                target = stage / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text, encoding='utf-8')
+            (stage / 'preparation.zip').write_bytes(archive.getvalue())
+            stage.rename(destination)
+    except OSError as exc:
+        raise ValueError(f'Could not save preparation files under {root}. Check the server output directory and available disk space.') from exc
     return dict(pdb=pdb, psf=psf, manifest=manifest, structure=inspect_pdb(pdb),
+                storage=storage,
                 bundle_base64=base64.b64encode(archive.getvalue()).decode())
