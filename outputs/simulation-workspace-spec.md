@@ -6,6 +6,7 @@ Supply a protein and describe a simulation. The agent turns that request into an
 ## Starting choices
 - Protein systems; initial example: ubiquitin.
 - OpenMM as initial engine.
+- CHARMM36 as the starting force field for PSF/PDB preparation. Users supply the local protein topology file `top_all36_prot.rtf` through the uploader; it is not bundled or automatically downloaded. Other compatible CHARMM-format files and matching parameters can be selected. Supporting another force-field family requires a compatible preparation and runner path.
 - Both remain changeable.
 - NAMD tutorial as a reference and replication benchmark, not a mandatory lesson sequence.
 
