@@ -82,6 +82,48 @@ def uploaded_files(payload, key, required=False):
     return result
 
 
+def select_protein(pdb):
+    """Protein-only selection for supported residues, retaining their hydrogens.
+
+    Recognize unfamiliar residues with a peptide backbone too, so unsupported
+    modified amino acids produce a review error instead of disappearing.
+    This is a conservative local approximation of VMD's protein selection.
+    """
+    lines = pdb.splitlines()
+    if sum(line[:6].strip() == 'MODEL' for line in lines) > 1:
+        raise ValueError('Multiple models found. Select one model before uploading.')
+    groups = {}
+    def residue_key(line):
+        return (line[21:22], line[72:76], line[22:27], line[17:20].strip())
+    for line in lines:
+        if line[:6].strip() in ('ATOM', 'HETATM'):
+            groups.setdefault(residue_key(line), []).append(line)
+    selected = {key for key, records in groups.items()
+                if key[3] in PROTEIN or {'N', 'CA', 'C', 'O'} <= {line[12:16].strip() for line in records}}
+    if not selected:
+        raise ValueError('Protein selection is empty. Supply a PDB containing protein residues.')
+    output, active = [], False
+    for line in lines:
+        record = line[:6].strip()
+        if record in ('ATOM', 'HETATM') and residue_key(line) in selected:
+            output.append(line)
+            active = True
+        elif record == 'TER' and active:
+            output.append('TER')
+            active = False
+    excluded = {}
+    for key, records in groups.items():
+        if key not in selected:
+            entry = excluded.setdefault(key[3], dict(residues=0, atoms=0))
+            entry['residues'] += 1
+            entry['atoms'] += len(records)
+    protein = '\n'.join(output)+'\nEND\n'
+    return protein, dict(selection='protein', implementation='Standard residue names or peptide-backbone recognition; supported standard proteins only.',
+                         selected_atoms=sum(len(groups[key]) for key in selected),
+                         selected_residues=len(selected), excluded_atoms=sum(item['atoms'] for item in excluded.values()),
+                         excluded_by_residue=excluded, protein_pdb_sha256=digest(protein))
+
+
 def prepare(payload):
     mode = payload.get('mode')
     pdb = text_file(payload.get('pdb'), 'PDB')
@@ -93,9 +135,11 @@ def prepare(payload):
     if mode != 'generate':
         raise ValueError('Choose generate or upload preparation mode.')
     topology = uploaded_files(payload, 'topologies', required=True)
+    source_pdb = pdb
+    pdb, selection = select_protein(pdb)
     structure = inspect_pdb(pdb)
-    if structure['heterogens'] or any(a['residue'] not in PROTEIN for a in structure['atoms']):
-        raise ValueError('Generation currently supports standard proteins only. Prepare ligands, water, ions or modified residues externally, then upload the PSF/PDB pair.')
+    if any(a['residue'] not in PROTEIN for a in structure['atoms']):
+        raise ValueError('Protein selection contains unsupported modified residues. Prepare these externally and upload the PSF/PDB pair.')
     # Never connect across unreviewed chain breaks or rebuild a missing backbone.
     residues = {}
     segments = {}
@@ -171,13 +215,13 @@ def prepare(payload):
                 raise ValueError('psfgen did not produce a supported PSF/PDB pair.')
         result_pdb, psf = (work / 'prepared.pdb').read_text(), (work / 'prepared.psf').read_text()
         pair = validate_pair(result_pdb, psf)
-        detail = dict(options=options, segments=mapping, input_sha256=digest(pdb),
+        detail = dict(options=options, segments=mapping, input_sha256=digest(source_pdb), selection=selection,
                       topologies=[dict(name=f['name'], sha256=digest(f['text'])) for f in topology],
                       engine=json.loads((work / 'engine.json').read_text()), log=log)
-        return preparation_result(result_pdb, psf, mode, parameters, pair, detail, topology, source_pdb=pdb)
+        return preparation_result(result_pdb, psf, mode, parameters, pair, detail, topology, source_pdb=source_pdb, protein_pdb=pdb)
 
 
-def preparation_result(pdb, psf, mode, parameters, pair, detail, topologies, source_pdb=None):
+def preparation_result(pdb, psf, mode, parameters, pair, detail, topologies, source_pdb=None, protein_pdb=None):
     preparation_id = str(uuid4())
     root = output_root()
     destination = root / preparation_id
@@ -196,6 +240,8 @@ def preparation_result(pdb, psf, mode, parameters, pair, detail, topologies, sou
     files = {'prepared.pdb': pdb, 'prepared.psf': psf, 'manifest.json': json.dumps(manifest, indent=2)}
     if source_pdb is not None:
         files['source.pdb'] = source_pdb
+    if protein_pdb is not None:
+        files['protein.pdb'] = protein_pdb
     if detail:
         files['psfgen.log'] = detail['log']
     for kind, items in [('topologies', topologies), ('parameters', parameters)]:

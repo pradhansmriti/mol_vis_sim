@@ -20,7 +20,7 @@ Open http://127.0.0.1:8765. Prepare the files using one of the two routes below,
 
 Other compatible CHARMM-format topology files can be uploaded instead, with their corresponding parameter files and appropriate residue aliases/patch choices. The uploaded contents determine the preparation; the filename is not hard-coded. Other force-field families remain possible future choices, but require a compatible preparation/runner path. A PSF contains topology information and does not replace the force-field parameter files required to run a simulation.
 
-- **Generate PSF + PDB:** upload a protein PDB and the matching CHARMM residue topology files (`.rtf`). Review the HIS alias (HSE/HSD/HSP), first/last residue patches (NTER/CTER or NONE), and coordinate-guessing consent. The standalone backend splits chains/segments, maps ILE CD1 to CHARMM CD, builds atoms, assigns coordinates, and writes an X-PLOR PSF and matching PDB. Explicitly named histidine variants are retained. Missing backbone atoms, residue-number gaps, reused TER-separated segment IDs, insertion codes, alternate positions, and nonstandard residues require external resolution. Disulfide/custom patches are not inferred. No solvation or minimization occurs.
+- **Generate PSF + PDB:** upload a protein PDB and the matching CHARMM residue topology files (`.rtf`). Review the HIS alias (HSE/HSD/HSP), first/last residue patches (NTER/CTER or NONE), and coordinate-guessing consent. Before psfgen, the backend selects protein residues and writes `protein.pdb`, excluding crystallographic waters, ions and other non-protein components. Existing protein hydrogens are retained. The selection uses standard residue names and peptide-backbone recognition as a conservative approximation of VMD `atomselect top "protein"`; unfamiliar backbone-containing residues are flagged for review rather than silently discarded. The manifest and activity log record retained atom counts and excluded components. Existing PSF/PDB uploads are never filtered. The standalone backend splits chains/segments, maps ILE CD1 to CHARMM CD, builds atoms, assigns coordinates, and writes an X-PLOR PSF and matching PDB. Explicitly named histidine variants are retained. Missing backbone atoms, residue-number gaps, reused TER-separated segment IDs, insertion codes, alternate positions, and nonstandard residues require external resolution. Disulfide/custom patches are not inferred. No solvation or minimization occurs.
 - **Upload existing files:** provide the PSF and PDB from the same preparation. Files are retained unchanged. Checks cover atom count, ordered residue/atom identity, segment IDs when present, finite charges/masses and coordinates. Bonded terms and parameter compatibility are not yet validated.
 
 Both routes accept optional parameter-file uploads, retained in the downloadable ZIP for the future runner. Download PDB/PSF individually or a preparation bundle containing files, hashes, options, segment mapping, topology/parameter uploads and the engine log when generated. A checked pair is **not** marked simulation-ready. Matching CHARMM parameters, solvent selection and scientific validation remain required; PSF input is never assigned Amber14/OBC2 settings automatically.
@@ -43,7 +43,8 @@ mol_vis_sim/runs/preparations/<preparation-id>/
   prepared.psf
   manifest.json
   preparation.zip
-  source.pdb          # original input, for generated pairs
+  source.pdb          # unmodified original input, for generated pairs
+  protein.pdb         # protein-only input passed to psfgen
   psfgen.log          # for generated pairs
   topologies/        # supplied topology files, for generation
   parameters/        # supplied parameter files, when provided

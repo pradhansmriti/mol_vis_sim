@@ -11,7 +11,7 @@ from unittest.mock import patch
 import zipfile
 
 from molvis.planning import create_plan, inspect_pdb
-from molvis.preparation import prepare, validate_pair
+from molvis.preparation import prepare, validate_pair, select_protein
 
 
 def pdb_atom(index, name, xyz, segid='P000', chain='A', residue=1):
@@ -61,6 +61,27 @@ class StorageIsolation:
 
 
 class PairTests(StorageIsolation, unittest.TestCase):
+    def test_protein_selection_excludes_water_ions_and_ligands_keeps_hydrogens(self):
+        hydrogen = pdb_atom(5,'HN',(0,1,0))
+        water = pdb_atom(6,'O',(6,0,0),residue=101).replace('ALA','HOH').replace('ATOM  ','HETATM')
+        ion = pdb_atom(7,'CA',(7,0,0),residue=102).replace('ALA','CAL').replace('ATOM  ','HETATM')
+        ligand = pdb_atom(8,'C1',(8,0,0),residue=103).replace('ALA','LIG').replace('ATOM  ','HETATM')
+        protein, report = select_protein(PDB.replace('END',hydrogen+'\n'+water+'\n'+ion+'\n'+ligand))
+        self.assertIn(hydrogen,protein)
+        self.assertNotIn('HOH',protein)
+        self.assertNotIn('CAL',protein)
+        self.assertNotIn('LIG',protein)
+        self.assertEqual(report['selected_atoms'],5)
+        self.assertEqual(report['excluded_atoms'],3)
+        self.assertEqual(report['excluded_by_residue']['HOH'],dict(residues=1,atoms=1))
+
+    def test_selection_rejects_empty_multiple_models_and_retains_modified_backbone(self):
+        with self.assertRaisesRegex(ValueError,'empty'):
+            select_protein(pdb_atom(1,'O',(0,0,0)).replace('ALA','HOH'))
+        with self.assertRaisesRegex(ValueError,'Multiple models'):
+            select_protein('MODEL 1\n'+PDB+'MODEL 2\n'+PDB)
+        with self.assertRaisesRegex(ValueError,'unsupported modified residues'):
+            prepare(generation_payload() | {'pdb':PDB.replace('ALA','MSE')})
     def test_upload_preserves_pair_and_parameters(self):
         result = prepare(dict(mode='upload', pdb=PDB, psf=PSF,
                               parameters=[dict(name='test.prm',text='* test parameters')]))
@@ -127,6 +148,17 @@ class PairTests(StorageIsolation, unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec('psfgen'), 'Standalone psfgen is not installed in this Python environment')
 class NativePreparationTests(StorageIsolation, unittest.TestCase):
+    def test_generation_with_crystal_water_saves_original_and_protein_selection(self):
+        water = pdb_atom(9,'O',(9,0,0),residue=101).replace('ALA','HOH').replace('ATOM  ','HETATM')
+        source = PDB.replace('END',water+'\nEND')
+        result = prepare(generation_payload() | {'pdb':source})
+        self.assertEqual(result['structure']['atom_count'],5)
+        selection = result['manifest']['details']['selection']
+        self.assertEqual(selection['excluded_by_residue']['HOH']['residues'],1)
+        saved = Path(result['storage']['directory'])
+        self.assertEqual((saved/'source.pdb').read_text(),source)
+        self.assertNotIn('HOH',(saved/'protein.pdb').read_text())
+        self.assertNotIn('HOH',result['pdb'])
     def test_real_psfgen_generation_and_round_trip(self):
         result = prepare(generation_payload())
         self.assertEqual(result['structure']['atom_count'],5)

@@ -25,7 +25,7 @@ $('prep-mode').addEventListener('change', () => {
   $('topology-field').hidden = !generate; $('topologies').disabled = !generate; $('topologies').required = generate;
   $('generation-options').hidden = !generate;
   $('prepare').textContent = generate ? 'Generate PSF + PDB' : 'Check PSF + PDB pair';
-  $('prep-help').textContent = generate ? 'Standard proteins only; resolve chain gaps, alternate positions and custom/disulfide patches first. HIS aliases and termini are applied as selected. No minimization or solvation is performed.' : 'Upload files from the same preparation. Atom count and ordered identity must match. Existing coordinates and topology are retained; bonded terms and force-field parameters are not validated.';
+  $('prep-help').textContent = generate ? 'Protein-only selection is applied before psfgen: waters, ions and other non-protein components are excluded and recorded. Protein hydrogens are retained. Resolve chain gaps, alternate positions and custom/disulfide patches first. No minimization or solvation is performed.' : 'Upload files from the same preparation. Atom count and ordered identity must match. Existing coordinates and topology are retained; bonded terms and force-field parameters are not validated.';
 });
 async function readFile(file, label) {
   if (!file || file.size > 5_000_000) throw Error(`Choose a ${label} file smaller than 5 MB.`);
@@ -62,6 +62,11 @@ $('prepare').addEventListener('click', async () => {
     $('structure-info').textContent = `${result.structure.atom_count} atoms · ${result.structure.residue_count} residues`;
     $('status').textContent = 'Files prepared';
     $('events').textContent = mode === 'generate' ? 'Standalone psfgen produced a matching PSF/PDB pair. No simulation has run.' : 'Uploaded PSF/PDB pair checked. No atoms or coordinates changed.';
+    const selection = result.manifest.details.selection;
+    if (selection) {
+      const removed = Object.entries(selection.excluded_by_residue).map(([name,counts]) => `${counts.residues} ${name} residues`).join(', ');
+      $('events').textContent += ` Protein selection retained ${selection.selected_atoms} input atoms; excluded ${selection.excluded_atoms} atoms${removed ? ` (${removed})` : ''}. Original input: source.pdb; psfgen input: protein.pdb.`;
+    }
     $('record').textContent = JSON.stringify(result.manifest,null,2); draw();
   } catch(error) {
     if (submittedRevision === revision) { $('error').textContent = error.message; $('prep-status').textContent = 'Preparation needs attention.'; }
