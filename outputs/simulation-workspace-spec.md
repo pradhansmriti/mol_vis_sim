@@ -6,7 +6,7 @@ Supply a protein and describe a simulation. The agent turns that request into an
 ## Starting choices
 - Protein systems; initial example: ubiquitin.
 - OpenMM as initial engine.
-- The combined protein/lipid topology `top_all27_prot_lipid.inp` as the starting choice for PSF/PDB preparation (CHARMM22 proteins / CHARMM27 lipids), with matching tutorial parameters `par_all27_prot_lipid.inp`. Users supply the local combined topology file through the uploader; it is not bundled or automatically downloaded. CHARMM36 and other compatible CHARMM-format files and matching parameters can be selected. Supporting another force-field family requires a compatible preparation and runner path.
+- CHARMM36 protein topology `top_all36_prot.rtf` as the starting choice for PSF/PDB preparation; our local protein parameters are `par_all36m_prot.prm` (CHARMM36m). Users supply local files through the uploader. Other compatible topologies remain selectable. CHARMM36 separates protein and lipid topologies; older combined files such as `top_all27_prot_lipid.inp` contain CHARMM22 protein / CHARMM27 lipid definitions. This prototype uses only the protein topology.
 - Both remain changeable.
 - NAMD tutorial as a reference and replication benchmark, not a mandatory lesson sequence.
 
