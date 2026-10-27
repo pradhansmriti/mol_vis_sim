@@ -2,3 +2,5 @@
 work/
 __pycache__/
 *.pyc
+.prep-env/
+.venv/

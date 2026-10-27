@@ -1,0 +1,9 @@
+name: molvis
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - c-compiler
+  - pip:
+      - https://github.com/Eigenstate/psfgen/archive/refs/tags/v1.0.5.tar.gz#sha256=a514be6af7b6ee2d09aca7a45917c0336834f64ae3b434b29ec61e9071673b5c

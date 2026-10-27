@@ -21,17 +21,17 @@ def inspect_pdb(text):
         try:
             atom = dict(name=line[12:16].strip(), altloc=line[16:17].strip(),
                         residue=line[17:20].strip(), chain=line[21:22].strip(),
-                        residue_id=line[22:27].strip(), record=record,
+                        residue_id=line[22:27].strip(), segment_id=line[72:76].strip(), record=record,
                         xyz=[float(line[start:start+8]) for start in (30, 38, 46)])
         except ValueError as exc:
             raise ValueError('An atom has invalid PDB coordinates.') from exc
         if not all(math.isfinite(v) for v in atom['xyz']):
             raise ValueError('Atom coordinates must be finite.')
-        key = (atom['chain'], atom['residue_id'], atom['name'])
+        key = (atom['chain'], atom['segment_id'], atom['residue_id'], atom['name'])
         if atom['altloc'] or key in seen:
             raise ValueError('Alternate or duplicate atom positions found. Resolve these before planning.')
         seen.add(key)
-        residues.add((atom['chain'], atom['residue_id'], atom['residue']))
+        residues.add((atom['chain'], atom['segment_id'], atom['residue_id'], atom['residue']))
         atoms.append(atom)
     if not atoms:
         raise ValueError('No ATOM or HETATM records found. Use fixed-column PDB format.')
@@ -56,6 +56,10 @@ def number(settings, key, default, low, high):
 
 def create_plan(payload):
     structure = inspect_pdb(payload.get('pdb', ''))
+    pair = None
+    if payload.get('psf') is not None:
+        from .preparation import validate_pair
+        pair = validate_pair(payload['pdb'], payload['psf'])
     settings = payload.get('settings', {})
     if not isinstance(settings, dict):
         raise ValueError('settings must be an object.')
@@ -83,19 +87,23 @@ def create_plan(payload):
                        action=f'{duration:g} ps requested dynamics', steps=counts[0]),
                   dict(id='analyze', name='Analyze and export', state='proposed',
                        action='Report traces and outputs; execution success does not establish convergence.')])
+    if pair:
+        steps[1].update(name='Review prepared PSF/PDB', action='Atom pairing checked; review protonation, patches and generated coordinates.')
+        steps[2]['action'] = 'Load the PSF with matching CHARMM parameters; solvent and parameter compatibility remain unresolved.'
     return dict(schema_version=1, id=str(uuid4()), created_at=datetime.now(timezone.utc).isoformat(),
                 state='proposed', execution_available=False,
                 request=str(payload.get('request', ''))[:2000],
                 structure=structure,
+                preparation=dict(mode='psf_pdb', pair=pair, simulation_ready=False) if pair else None,
                 settings=dict(temperature_k=temperature, duration_ps=duration,
                               equilibration_ps=equilibration, timestep_fs=timestep,
                               production_steps=counts[0], equilibration_steps=counts[1],
-                              engine='OpenMM', forcefield=['amber14-all.xml', 'implicit/obc2.xml'],
-                              solvent='implicit OBC2', constraints='HBonds', nonbonded_method='NoCutoff',
+                              engine='OpenMM', forcefield=['Matching CHARMM parameters required'] if pair else ['amber14-all.xml', 'implicit/obc2.xml'],
+                              solvent='Unresolved for supplied PSF' if pair else 'implicit OBC2', constraints='HBonds', nonbonded_method='NoCutoff',
                               integrator='LangevinMiddle', friction_per_ps=1, seed=2026,
                               protonation='Unresolved — review before preparation'),
                 decisions=['Confirm structure completeness and protonation.',
-                           'Review force field, solvent, and minimization settings.',
+                           'Supply matching CHARMM parameters and select a compatible solvent model.' if pair else 'Review force field, solvent, and minimization settings.',
                            'Choose compute platform and reporting interval.',
                            'Confirm whether preparatory equilibration is appropriate.'] +
                           ([f'Resolve non-protein components: {", ".join(structure["heterogens"])}.']

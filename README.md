@@ -4,15 +4,34 @@ The agreed product design, specification, and interactive preview are in [output
 
 ## Run locally
 
-Requires Python 3.10 or newer. No third-party dependencies are needed for this planning prototype.
+Requires Python 3.10 or newer. Existing PSF/PDB uploads and planning use the standard library. Generation uses the standalone Python `psfgen` library in the backend; VMD and Tcl are not required.
 
 ```sh
 python3 -m molvis
 ```
 
-Open http://127.0.0.1:8765. Upload a fixed-column PDB, edit the explicit settings, and select **Propose workflow**. The viewer projects actual Cα coordinates and supports drag rotation and scroll zoom. Export saves the proposed configuration, structure hash, original PDB text, steps, and decisions as JSON. Uploads are processed locally in memory and are not written to disk.
+Open http://127.0.0.1:8765. Prepare the files using one of the two routes below, then edit the settings and select **Propose workflow**. The viewer projects actual Cα coordinates and supports drag rotation and scroll zoom. Export saves the proposed configuration, file hashes, prepared PDB/PSF text, steps, and preparation record as JSON.
 
-This first implementation supports planning and structure inspection. It does not interpret natural-language requests, repair structures, validate force-field templates, or execute OpenMM. Temperature/energy data and trajectory controls will become available with the runner. A parsed PDB is not a scientifically validated structure. Multiple models, alternate locations, and duplicate atoms require explicit resolution before planning; non-protein components are retained and flagged for review. PDB files are limited to 5 MB; mmCIF is not yet supported.
+## Prepare files before planning
+
+- **Generate PSF + PDB:** upload a protein PDB and the matching CHARMM residue topology files (`.rtf`). Review the HIS alias (HSE/HSD/HSP), first/last residue patches (NTER/CTER or NONE), and coordinate-guessing consent. The standalone backend splits chains/segments, maps ILE CD1 to CHARMM CD, builds atoms, assigns coordinates, and writes an X-PLOR PSF and matching PDB. Explicitly named histidine variants are retained. Missing backbone atoms, residue-number gaps, reused TER-separated segment IDs, insertion codes, alternate positions, and nonstandard residues require external resolution. Disulfide/custom patches are not inferred. No solvation or minimization occurs.
+- **Upload existing files:** provide the PSF and PDB from the same preparation. Files are retained unchanged. Checks cover atom count, ordered residue/atom identity, segment IDs when present, finite charges/masses and coordinates. Bonded terms and parameter compatibility are not yet validated.
+
+Both routes accept optional parameter-file uploads, retained in the downloadable ZIP for the future runner. Download PDB/PSF individually or a preparation bundle containing files, hashes, options, segment mapping, topology/parameter uploads and the engine log when generated. A checked pair is **not** marked simulation-ready. Matching CHARMM parameters, solvent selection and scientific validation remain required; PSF input is never assigned Amber14/OBC2 settings automatically.
+
+For generation, install the backend dependency in an isolated environment (a C compiler is needed to build its extension):
+
+```sh
+python3 -m venv .prep-env
+.prep-env/bin/python -m pip install -r requirements-preparation.txt
+.prep-env/bin/python -m molvis
+```
+
+Alternatively use `conda env create -f environment.yml` and `conda run -n molvis python -m molvis`. The source dependency is version/hash pinned. The conda recipe builds from source so it can support platforms without a prebuilt psfgen package. For a separate preparation interpreter, set `MOLVIS_PREP_PYTHON` to its absolute Python path before starting the server. Browser users need no VMD installation; a hosted deployment must install the library on its server.
+
+Generation runs in a temporary directory in an isolated worker process with a 120-second timeout. Temporary inputs and outputs are removed after each request; uploaded pair validation uses memory. Each file is limited to 5 MB, the request to 30 MB, and topology/parameter uploads to 12 files of each kind. Topology and parameter data are not executed as scripts. The server remains bound to loopback.
+
+This implementation supports preparation, planning and structure inspection. It does not interpret natural-language requests, validate a complete simulation parameter set, or execute OpenMM. Temperature/energy data and trajectory controls will become available with the runner. A parsed PDB is not a scientifically validated structure. Multiple models, alternate locations, and duplicate atoms require explicit resolution; non-protein components are retained in existing pairs and flagged for review. mmCIF is not yet supported.
 
 The default request names ubiquitin as an example; it does not identify the uploaded protein. Supply your own ubiquitin PDB to plan that example. Production duration is separate from the optional preparatory equilibration duration. No equilibration is silently added.
 
@@ -20,11 +39,16 @@ The default request names ubiquitin as an example; it does not identify the uplo
 
 ```sh
 python3 -m unittest discover -s tests -v
+.prep-env/bin/python -m unittest discover -s tests -v
 node --check web/app.js
 ```
 
 ## Next implementation
 
-Connect a validated OpenMM runner to these plan/step/event records: preparation review, template validation, minimization, optional equilibration, production, trajectory and state reporters, and reproducibility metadata. Add temperature and energy tabs driven by recorded samples. Scientific validation remains separate from execution success.
+The native-generation test runs when psfgen is installed, and is skipped in the dependency-free environment. It uses a synthetic topology for testing only, generates an added atom, checks the pair, reuploads it, and creates a plan.
+
+Connect a validated OpenMM runner to these plan/step/event records: CHARMM parameter validation, preparation review, minimization, optional equilibration, production, trajectory and state reporters, and reproducibility metadata. Add temperature and energy tabs driven by recorded samples. Scientific validation remains separate from execution success.
 
 Proposed force-field and solvent settings follow the supported combinations described in the [OpenMM application guide](https://docs.openmm.org/latest/userguide/application/02_running_sims.html). They have not yet been validated against a ubiquitin run or the NAMD tutorial.
+
+Preparation uses the [standalone Python psfgen API](https://psfgen.robinbetz.com/api.html) ([source](https://github.com/Eigenstate/psfgen)). ParmEd was considered for conversion, but exporting topology alone does not replace residue construction and coordinate generation. CHARMM workflows still require matching parameter files, as described in the OpenMM guide above.

@@ -1,10 +1,12 @@
 import json
+import importlib.util
 import threading
 import unittest
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from molvis.planning import create_plan, inspect_pdb
 from molvis.__main__ import Handler
+from test_preparation import PDB, PSF, generation_payload
 
 
 def atom(serial=1, x=1.0, altloc=' '):
@@ -81,6 +83,24 @@ class ServerTests(unittest.TestCase):
 
     def test_cross_site_request_rejected(self):
         self.assertEqual(self.request('POST', '/api/plan', '{}', {'Origin':'https://example.com'})[0], 403)
+
+    def test_preparation_upload_endpoint(self):
+        status, data = self.request('POST', '/api/prepare', json.dumps(dict(mode='upload',pdb=PDB,psf=PSF)))
+        self.assertEqual(status,200)
+        result = json.loads(data)
+        status, data = self.request('POST', '/api/plan', json.dumps(dict(pdb=result['pdb'],psf=result['psf'])))
+        self.assertEqual(status,200)
+        self.assertEqual(json.loads(data)['preparation']['pair']['atom_count'],4)
+        self.assertEqual(self.request('POST', '/api/prepare', json.dumps(dict(mode='upload',pdb=PDB,psf='bad')))[0],400)
+        self.assertEqual(self.request('POST', '/api/prepare', '{}', {'Origin':'https://example.com'})[0],403)
+
+    @unittest.skipUnless(importlib.util.find_spec('psfgen'), 'Standalone psfgen is not installed')
+    def test_native_generation_endpoint(self):
+        status, data = self.request('POST', '/api/prepare', json.dumps(generation_payload()))
+        self.assertEqual(status,200,data.decode())
+        result = json.loads(data)
+        self.assertEqual(result['manifest']['pair']['atom_count'],5)
+        self.assertEqual(result['manifest']['mode'],'generate')
 
 
 if __name__ == '__main__':
