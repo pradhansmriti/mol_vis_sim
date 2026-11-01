@@ -1,5 +1,34 @@
 # Standalone psfgen core investigation — 2026-10-29
 
+## Official download follow-up — 2026-11-01
+
+The user downloaded the official **NAMD 3.0.3 MacOS universal multicore binary
+distribution**, rather than the source archive. It includes a standalone universal
+`psfgen` executable (Apple Silicon and Intel), so building from source may not be
+necessary on this machine.
+
+- Download archive SHA256:
+  `775e3b2e5c95932c160d2ee490b03401fcac4f3d9e13fc7c85a118ab3e68c2c3`.
+- Archive member: `NAMD_3.0.3_MacOS-universal-multicore/psfgen`, 2,861,571 bytes.
+- Member SHA256:
+  `7878f0f6f55a27f3404b2c7f1345418202836023469783e4e2c1ac5aa408f495`.
+- These are locally computed hashes for reproducibility, not signatures or an
+  independently verified upstream checksum.
+
+Initial startup was terminated before version output. The executable carried
+the macOS download-quarantine attribute. After the user reported approving it,
+the extracted `psfgen` file was no longer present in the Downloads package folder.
+The archive still contains it. Official-runtime verification and the ubiquitin
+comparison remain pending locating/restoring the executable. No quarantine flags
+were removed and no macOS security settings were changed by the agent.
+
+The app now has an optional controlled Tcl subprocess adapter selected with
+`--psfgen /absolute/path/to/psfgen` or `MOLVIS_PSFGEN`. The adapter requires 2.0+,
+records executable/version provenance, saves its script, and rejects engine
+errors even on a zero process exit. Adapter and regression tests pass (26 tests);
+this is not a claim that the downloaded binary has been validated. The active
+backend has not been switched.
+
 ## Conclusion
 
 A standalone psfgen 2.0 executable is a viable replacement backend for the

@@ -1,6 +1,7 @@
 """Run with python3 -m molvis. Bound to loopback only."""
 import argparse
 import json
+import os
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -68,7 +69,10 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--psfgen', help='Path to a standalone psfgen 2.x executable; overrides MOLVIS_PSFGEN.')
     args = parser.parse_args()
+    if args.psfgen:
+        os.environ['MOLVIS_PSFGEN'] = args.psfgen
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Workspace: http://127.0.0.1:{server.server_port}', flush=True)
     try:

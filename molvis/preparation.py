@@ -14,6 +14,7 @@ import zipfile
 from uuid import uuid4
 
 from .planning import inspect_pdb
+from .standalone_psfgen import executable_path, write_script, write_engine_record
 
 LIMIT = 5_000_000
 PROTEIN = set('ALA ARG ASN ASP CYS GLN GLU GLY HIS HSD HSE HSP ILE LEU LYS MET PHE PRO SER THR TRP TYR VAL'.split())
@@ -196,20 +197,31 @@ def prepare(payload):
             config['segments'].append(dict(segid=segid, pdb=name))
             mapping.append(dict(chain=key[0], input_segment=key[1], output_segment=segid))
         (work / 'config.json').write_text(json.dumps(config))
-        worker = Path(__file__).with_name('preparation_worker.py')
-        python = os.environ.get('MOLVIS_PREP_PYTHON', sys.executable)
+        configured_executable = os.environ.get('MOLVIS_PSFGEN')
+        executable = executable_path(configured_executable) if configured_executable else None
+        if executable:
+            write_script(work, config)
+            command = [str(executable), 'prepare.tcl']
+        else:
+            worker = Path(__file__).with_name('preparation_worker.py')
+            python = os.environ.get('MOLVIS_PREP_PYTHON', sys.executable)
+            command = [python, str(worker), str(work)]
         with (work / 'psfgen.log').open('w') as log:
             try:
-                process = subprocess.run([python, str(worker), str(work)], stdout=log, stderr=subprocess.STDOUT, timeout=120, check=False)
+                process = subprocess.run(command, cwd=work, stdout=log, stderr=subprocess.STDOUT, timeout=120, check=False)
             except subprocess.TimeoutExpired as exc:
                 raise ValueError('Preparation exceeded 120 seconds. No prepared pair was accepted.') from exc
             except OSError as exc:
-                raise ValueError('Preparation Python is unavailable. Install the server environment from environment.yml.') from exc
+                raise ValueError('Preparation backend could not be started. Check the configured psfgen executable or preparation Python.') from exc
         log = (work / 'psfgen.log').read_text(errors='replace')[-100_000:]
         if (work / 'engine-output.log').exists():
             log += (work / 'engine-output.log').read_text(errors='replace')[-100_000:]
         if process.returncode:
-            raise ValueError('Standalone psfgen preparation failed. '+log[-6000:])
+            raise ValueError(f'Standalone psfgen preparation failed (exit {process.returncode}). '+log[-6000:])
+        if re.search(r'(?im)^\s*(?:psfgen\)\s*)?(?:ERROR\b|FATAL\b|MOLVIS_PSFGEN_ERROR:)', log):
+            raise ValueError('psfgen reported an engine error even though the process exited successfully. '+log[-6000:])
+        if executable:
+            write_engine_record(work, executable)
         for name in ('prepared.pdb', 'prepared.psf'):
             if not (work / name).is_file() or (work / name).stat().st_size > LIMIT:
                 raise ValueError('psfgen did not produce a supported PSF/PDB pair.')
@@ -218,6 +230,8 @@ def prepare(payload):
         detail = dict(options=options, segments=mapping, input_sha256=digest(source_pdb), selection=selection,
                       topologies=[dict(name=f['name'], sha256=digest(f['text'])) for f in topology],
                       engine=json.loads((work / 'engine.json').read_text()), log=log)
+        if executable:
+            detail['script'] = (work / 'prepare.tcl').read_text()
         return preparation_result(result_pdb, psf, mode, parameters, pair, detail, topology, source_pdb=source_pdb, protein_pdb=pdb)
 
 
@@ -244,6 +258,8 @@ def preparation_result(pdb, psf, mode, parameters, pair, detail, topologies, sou
         files['protein.pdb'] = protein_pdb
     if detail:
         files['psfgen.log'] = detail['log']
+        if 'script' in detail:
+            files['prepare.tcl'] = detail['script']
     for kind, items in [('topologies', topologies), ('parameters', parameters)]:
         for i, item in enumerate(items):
             files[f'{kind}/{i}-{item["name"]}'] = item['text']

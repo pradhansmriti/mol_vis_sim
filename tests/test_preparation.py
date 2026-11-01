@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -12,6 +13,7 @@ import zipfile
 
 from molvis.planning import create_plan, inspect_pdb
 from molvis.preparation import prepare, validate_pair, select_protein
+from molvis.standalone_psfgen import write_script
 
 
 def pdb_atom(index, name, xyz, segid='P000', chain='A', residue=1):
@@ -61,6 +63,36 @@ class StorageIsolation:
 
 
 class PairTests(StorageIsolation, unittest.TestCase):
+    def test_standalone_executable_adapter_records_version_and_hash(self):
+        executable = Path(self.output.name)/'fake-psfgen'
+        executable.write_text(f'#!{sys.executable}\nfrom pathlib import Path\n'
+                              f'Path("prepared.pdb").write_text({PDB!r})\n'
+                              f'Path("prepared.psf").write_text({PSF!r})\n'
+                              'Path("engine-version.txt").write_text("2.0\\n")\n')
+        executable.chmod(0o755)
+        with patch.dict(os.environ, {'MOLVIS_PSFGEN': str(executable)}):
+            result = prepare(generation_payload())
+        engine = result['manifest']['details']['engine']
+        self.assertEqual(engine['version'],'2.0')
+        self.assertEqual(engine['name'],'standalone psfgen executable')
+        self.assertEqual(engine['executable'],str(executable.resolve()))
+        self.assertEqual(len(engine['executable_sha256']),64)
+
+    def test_tcl_adapter_rejects_script_injection_and_wrong_settings(self):
+        work = Path(self.output.name)
+        for config in [dict(topologies=['x;exec bad'],segments=[],options=dict(histidine='HSE',first='NTER',last='CTER')),
+                       dict(topologies=[],segments=[],options=dict(histidine='HSE',first='[exec bad]',last='CTER'))]:
+            with self.subTest(config=config), self.assertRaises(ValueError):
+                write_script(work,config)
+
+    def test_zero_exit_does_not_hide_engine_error(self):
+        def failed_engine(*args, **kwargs):
+            kwargs['stdout'].write('psfgen) ERROR! Failed to parse autogenerate statement.\n')
+            kwargs['stdout'].flush()
+            return subprocess.CompletedProcess(args[0],0)
+        with patch('molvis.preparation.subprocess.run',side_effect=failed_engine):
+            with self.assertRaisesRegex(ValueError,'engine error'):
+                prepare(generation_payload())
     def test_protein_selection_excludes_water_ions_and_ligands_keeps_hydrogens(self):
         hydrogen = pdb_atom(5,'HN',(0,1,0))
         water = pdb_atom(6,'O',(6,0,0),residue=101).replace('ALA','HOH').replace('ATOM  ','HETATM')

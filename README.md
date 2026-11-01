@@ -6,6 +6,14 @@ The agreed product design, specification, and interactive preview are in [output
 
 Requires Python 3.10 or newer. Existing PSF/PDB uploads and planning use the standard library. Generation uses the standalone Python `psfgen` library in the backend; VMD and Tcl are not required.
 
+An official standalone psfgen 2.x executable can be selected instead of the legacy Python library:
+
+```sh
+python3 -m molvis --psfgen /absolute/path/to/NAMD/psfgen
+```
+
+Alternatively set `MOLVIS_PSFGEN` to that executable path before starting the server. This route uses the psfgen executable shipped with NAMD; it does not start NAMD dynamics or require VMD. Obtain the official package separately from UIUC. The executable must be approved to run by your operating system. The app does not change OS security settings. The adapter requires psfgen 2.0+, records the reported version and executable hash, and rejects engine errors even if the process exits with status zero. Only controlled filenames and validated preparation choices enter its Tcl script. Without this option, the existing Python-library backend remains selected.
+
 ```sh
 python3 -m molvis
 ```
