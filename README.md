@@ -79,6 +79,14 @@ The default request names ubiquitin as an example; it does not identify the uplo
 
 ## Checks
 
+The reproducible two-protein preparation checks and successful VMD comparisons are documented in [the validation report](outputs/preparation-validation.md). Run matched preparations with:
+
+```sh
+python3 -m molvis.validation run --psfgen /path/to/psfgen --topology /path/to/top_all36_prot.rtf --case 1UBQ=/path/to/1UBQ.pdb --case 1VII=/path/to/1VII.pdb
+```
+
+Add `--vmd /path/to/vmd` to generate and compare actual VMD references. Without it, VMD comparison is explicitly recorded as `not_run`. The command saves local inputs, a VMD reference script, and a JSON report under `work/preparation-validation/`; topology files and generated molecular files remain excluded from Git. The reference script currently supports single-chain proteins with HSE/NTER/CTER settings. To compare reference files generated elsewhere, place them together as `prepared.psf` and `prepared.pdb`, then run `python3 -m molvis.validation compare /path/to/app-output /path/to/reference`.
+
 ```sh
 python3 -m unittest discover -s tests -v
 .prep-env/bin/python -m unittest discover -s tests -v
