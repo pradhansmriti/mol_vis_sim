@@ -12,7 +12,7 @@ from unittest.mock import patch
 import zipfile
 
 from molvis.planning import create_plan, inspect_pdb
-from molvis.preparation import prepare, validate_pair, select_protein, map_terminal_oxygens, verify_terminal_coordinates
+from molvis.preparation import prepare, validate_pair, select_protein, map_terminal_oxygens, verify_terminal_coordinates, remove_input_hydrogens
 from molvis.standalone_psfgen import write_script
 
 
@@ -63,6 +63,16 @@ class StorageIsolation:
 
 
 class PairTests(StorageIsolation, unittest.TestCase):
+    def test_hydrogen_filter_preserves_heavy_atoms_and_respects_elements(self):
+        heavy = pdb_atom(1, 'CA', (1,2,3))
+        named = pdb_atom(2, '1HB', (2,3,4))
+        deuterium = pdb_atom(3, 'D', (3,4,5))
+        explicit_h = pdb_atom(4, 'X', (4,5,6)).ljust(76)+' H'
+        explicit_heavy = pdb_atom(5, 'HG', (5,6,7)).ljust(76)+' C'
+        kept, removed = remove_input_hydrogens([heavy,named,deuterium,explicit_h,explicit_heavy])
+        self.assertEqual(kept, [heavy,explicit_heavy])
+        self.assertEqual([a['name'] for a in removed], ['1HB','D','X'])
+
     def test_cter_mapping_is_endpoint_only_and_preserves_pdb_columns(self):
         lines = [pdb_atom(1,'O',(0,1,2),residue=1),
                  pdb_atom(2,'O',(3,4,5),residue=2),pdb_atom(3,'OXT',(6,7,8),residue=2)]
@@ -178,7 +188,8 @@ class PairTests(StorageIsolation, unittest.TestCase):
         plan = create_plan(dict(pdb=PDB,psf=PSF))
         self.assertEqual(plan['preparation']['pair']['atom_count'],4)
         self.assertNotIn('amber14-all.xml', plan['settings']['forcefield'])
-        self.assertIn('Unresolved', plan['settings']['solvent'])
+        self.assertEqual(plan['settings']['solvent_model'], 'deferred')
+        self.assertEqual(plan['compatibility']['status'], 'not_checked')
 
     def test_segment_identity_supports_repeated_residue_numbers(self):
         pdb = pdb_atom(1,'CA',(0,0,0),chain=' ',segid='P000')+'\n'+pdb_atom(2,'CA',(1,0,0),chain=' ',segid='P001')
@@ -188,6 +199,7 @@ class PairTests(StorageIsolation, unittest.TestCase):
         for changes in ({'confirm_guess':False}, {'topologies':[]}, {'pdb':PDB.replace('ALA','HOH')},
                         {'pdb':PDB.replace(' CA ',' XX ')}, {'options':{'histidine':'auto'}},
                         {'options':{'first':'[exec bad]'}},
+                        {'options':{'hydrogens':'automatic'}},
                         {'topologies':[dict(name='../test.rtf',text=RTF)]}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 prepare(generation_payload() | changes)
@@ -203,6 +215,26 @@ class PairTests(StorageIsolation, unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get('MOLVIS_PSFGEN') or importlib.util.find_spec('psfgen'), 'No native psfgen backend is configured')
 class NativePreparationTests(StorageIsolation, unittest.TestCase):
+    def test_rebuild_removes_input_hydrogens_only_from_engine_input(self):
+        hydrogen = pdb_atom(5,'HN',(20,20,20))
+        source = PDB.replace('END',hydrogen+'\nEND')
+        payload = generation_payload() | {'pdb':source}
+        retained = prepare(payload)
+        self.assertEqual(next(a['xyz'] for a in retained['structure']['atoms'] if a['name']=='HN'), [20,20,20])
+        payload['options']['hydrogens'] = 'rebuild'
+        rebuilt = prepare(payload)
+        self.assertNotEqual(next(a['xyz'] for a in rebuilt['structure']['atoms'] if a['name']=='HN'), [20,20,20])
+        details = rebuilt['manifest']['details']
+        self.assertNotIn('target_ph',details['protonation'])
+        self.assertFalse(details['protonation']['automatic_ph_assignment'])
+        self.assertEqual(details['hydrogen_handling']['removed_input_atoms'],1)
+        saved = Path(rebuilt['storage']['directory'])
+        self.assertIn(hydrogen,(saved/'source.pdb').read_text())
+        self.assertIn(hydrogen,(saved/'protein.pdb').read_text())
+        self.assertNotIn(hydrogen,(saved/'segments/segment-0.pdb').read_text())
+        original = {a['name']:a['xyz'] for a in inspect_pdb(PDB)['atoms']}
+        self.assertEqual({a['name']:a['xyz'] for a in rebuilt['structure']['atoms'] if a['name']!='HN'},original)
+
     def test_cter_native_generation_preserves_terminal_oxygens(self):
         terminal = '\n'.join(pdb_atom(i,name,xyz,residue=2) for i,(name,xyz) in enumerate([
             ('N',(4,0,0)),('CA',(5.45,0,0)),('C',(6,1.4,0)),('O',(5.7,2.5,0)),('OXT',(7.1,1.2,0))],5))

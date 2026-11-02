@@ -1,0 +1,2 @@
+# Optional isolated environment for local OpenMM validation.
+openmm==8.6.1

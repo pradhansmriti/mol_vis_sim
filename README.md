@@ -2,6 +2,12 @@
 
 The agreed product design, specification, and interactive preview are in [outputs/README.md](outputs/README.md).
 
+## Preview
+
+![Molecular workspace with protein preparation, structure inspection, workflow planning, and deferred solvation settings](docs/images/workspace-preview.jpg)
+
+Current local interface · updated November 2, 2026. This preview is refreshed with interface changes.
+
 ## Run locally
 
 Requires Python 3.10 or newer. Existing PSF/PDB uploads and planning use the standard library. Generation uses the standalone Python `psfgen` library in the backend; VMD and Tcl are not required.
@@ -73,11 +79,13 @@ The interface shows the absolute server folder after preparation, and the respon
 
 The default root is `<repository>/runs/preparations`, independent of the launch directory. Set `MOLVIS_OUTPUT_DIR` before starting the server to use a different root. The server must have write access. Results are published only when the complete folder has been saved; a write failure returns an error rather than claiming success. Temporary scratch files are removed after each request. Each input file is limited to 5 MB, the request to 30 MB, and topology/parameter uploads to 12 files of each kind. Topology and parameter data are not executed as scripts. The server remains bound to loopback.
 
-This implementation supports preparation, planning and structure inspection. It does not interpret natural-language requests, validate a complete simulation parameter set, or execute OpenMM. Temperature/energy data and trajectory controls will become available with the runner. A parsed PDB is not a scientifically validated structure. Multiple models, alternate locations, and duplicate atoms require explicit resolution; non-protein components are retained in existing pairs and flagged for review. mmCIF is not yet supported.
+The interface supports preparation, planning and structure inspection. It does not interpret natural-language requests or execute OpenMM. A separate local diagnostic below checks CHARMM parameter loading and bounded vacuum minimization. Temperature/energy data and trajectory controls will become available with the runner. A parsed PDB is not a scientifically validated structure. Multiple models, alternate locations, and duplicate atoms require explicit resolution; non-protein components are retained in existing pairs and flagged for review. mmCIF is not yet supported.
 
 The default request names ubiquitin as an example; it does not identify the uploaded protein. Supply your own ubiquitin PDB to plan that example. Production duration is separate from the optional preparatory equilibration duration. No equilibration is silently added.
 
 ## Checks
+
+Generation offers **Retain supplied hydrogens** (the existing default) or **Rebuild with selected topology** (recommended for hydrogen naming mismatches). Rebuilding removes only input H/D/T atoms from the per-segment psfgen input, then psfgen adds hydrogens for the selected topology, protonation and termini. Original `source.pdb` and selected `protein.pdb` remain intact. The manifest records `options.hydrogens` and every removed input atom. Upload mode never changes the supplied pair. API clients can set `options.hydrogens` to `retain` or `rebuild`; the validation command also accepts `--hydrogens rebuild`.
 
 The reproducible two-protein preparation checks and successful VMD comparisons are documented in [the validation report](outputs/preparation-validation.md). Run matched preparations with:
 
@@ -92,6 +100,26 @@ python3 -m unittest discover -s tests -v
 .prep-env/bin/python -m unittest discover -s tests -v
 node --check web/app.js
 ```
+
+## Local OpenMM diagnostic
+
+Solvation and salt default to **Decide later**. After protein preparation and structure review, open **Later: solvation, salt and OpenMM compatibility** to choose an environment. Until then, exported plans leave solvent method, salt and box settings unset and record compatibility as deferred. Select vacuum, implicit OBC2, implicit GBn2, or explicit CHARMM-modified TIP3P, and upload matching CHARMM parameter/topology files to check compatibility. For vacuum and implicit models, an isolated worker actually creates the OpenMM System with HBonds constraints and evaluates finite energy/forces on the CPU. Implicit salt is Debye screening, not added ions. The explicit option records salt and padding but reports `requires_preparation`: it does not build water/ions or validate a periodic box yet. Missing files, engine availability, and parameter failures have distinct statuses. Proposing a workflow repeats the check for the submitted settings and stores its result and input hashes in the exported plan. Changed inputs invalidate the displayed check.
+
+There is no target-pH input. Histidine HSE/HSD/HSP and first/last patches control generation; other amino acids retain the supplied topology's states. This is not automatic pKa prediction, site-specific titration, or protonation validation. Changing protonation choices requires preparing the files again. Uploaded pairs retain their existing chemistry. The server uses `.venv/bin/python` when present for compatibility workers; set `MOLVIS_OPENMM_PYTHON` to select another installed environment. See [the solvent compatibility results](outputs/solvent-compatibility.md).
+
+Install the optional dependency into a separate environment:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-simulation.txt
+.venv/bin/python -m molvis.openmm_validation --preparation runs/preparations/PREPARATION_ID --topology /path/to/top_all36_prot.rtf --parameters /path/to/par_all36m_prot.prm --output work/openmm-validation/NEW_RUN
+```
+
+This uses OpenMM's [CHARMM PSF and parameter loading workflow](https://docs.openmm.org/latest/userguide/application/02_running_sims.html). The local test uses CHARMM36 protein topology plus CHARMM36m protein parameters; the filenames are recorded explicitly rather than inferred. Supply a compatible alternative topology/parameter set if choosing another force field. Repeat `--topology` or `--parameters` for additional files.
+
+The diagnostic checks PSF/PDB correspondence, creates a fully parameterized System for that input, evaluates finite energies and forces, and attempts at most 200 minimization iterations. Settings are deliberately **vacuum, NoCutoff, no constraints, no restraints, no dynamics** on one CPU thread. It rejects nonfinite values and energy increases, but does not assert convergence or production readiness. Set `--max-iterations` and `--tolerance` explicitly for another bounded check; `--platform Reference` is also supported.
+
+Each new output directory contains `report.json` (settings, input hashes, engine version, energies, forces and heavy-atom displacement), `minimized.pdb`, its matching `prepared.psf`, `system.xml`, and `state.xml`. Inputs are never overwritten, and an existing output folder is rejected. Parameter/minimization errors exit nonzero and save a failure report after input loading. These outputs are separate from preparation downloads. See [the measured results and remaining steps](outputs/openmm-validation.md). To include the optional OpenMM integration tests, run the regression suite with `.venv/bin/python` and a configured `MOLVIS_PSFGEN`.
 
 ## Next implementation
 

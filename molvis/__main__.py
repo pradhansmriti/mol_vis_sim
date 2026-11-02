@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from .planning import create_plan
 from .preparation import prepare, output_root
+from .compatibility import check_compatibility
 
 WEB = Path(__file__).resolve().parent.parent / 'web'
 
@@ -45,7 +46,7 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(200, (WEB / entry[0]).read_bytes(), entry[1])
 
     def do_POST(self):
-        if self.path not in ('/api/plan', '/api/prepare'):
+        if self.path not in ('/api/plan', '/api/prepare', '/api/compatibility'):
             self.reply(404, b'Not found', 'text/plain')
             return
         # Reject cross-site browser requests to this local service.
@@ -60,7 +61,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(size))
             if not isinstance(payload, dict):
                 raise ValueError('Request must be an object.')
-            result = prepare(payload) if self.path == '/api/prepare' else create_plan(payload)
+            actions = {'/api/prepare':prepare, '/api/plan':create_plan, '/api/compatibility':check_compatibility}
+            result = actions[self.path](payload)
             self.reply(200, json.dumps(result, allow_nan=False).encode(), 'application/json')
         except (ValueError, TypeError, UnicodeError) as exc:
             self.reply(400, json.dumps({'error': str(exc)}).encode(), 'application/json')

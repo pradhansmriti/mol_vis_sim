@@ -150,6 +150,22 @@ def map_terminal_oxygens(lines, last_patch, segid):
     return output, changes
 
 
+def remove_input_hydrogens(lines):
+    """Identify H/D/T by PDB element, falling back to the protein atom name."""
+    kept, removed = [], []
+    for line in lines:
+        element = line[76:78].strip().upper()
+        name = line[12:16].strip().lstrip('0123456789').upper()
+        hydrogen = element in ('H', 'D', 'T') if element else name.startswith(('H', 'D', 'T'))
+        if hydrogen:
+            removed.append(dict(chain=line[21:22].strip(), input_segment=line[72:76].strip(),
+                                residue_id=line[22:27].strip(), residue=line[17:20].strip(),
+                                name=line[12:16].strip()))
+        else:
+            kept.append(line)
+    return kept, removed
+
+
 def verify_terminal_coordinates(pdb, changes):
     atoms = {(a['segment_id'], a['residue_id'], a['name']): a for a in inspect_pdb(pdb)['atoms']}
     maximum = 0.0
@@ -215,7 +231,10 @@ def prepare(payload):
     first, last = options.get('first', 'NTER'), options.get('last', 'CTER')
     if first not in ('NTER', 'NONE') or last not in ('CTER', 'NONE'):
         raise ValueError('Choose NTER/CTER or NONE termini patches.')
-    options = dict(histidine=histidine, first=first, last=last)
+    hydrogens = options.get('hydrogens', 'retain')
+    if hydrogens not in ('retain', 'rebuild'):
+        raise ValueError('Choose retain or rebuild for input hydrogens.')
+    options = dict(histidine=histidine, first=first, last=last, hydrogens=hydrogens)
     if payload.get('confirm_guess') is not True:
         raise ValueError('Confirm hydrogen/missing-atom coordinate generation and the displayed protonation and termini choices.')
     for key, lines in segments.items():
@@ -233,9 +252,12 @@ def prepare(payload):
             name = f'topology-{i}.rtf'
             (work / name).write_text(item['text'])
             config['topologies'].append(name)
-        mapping, terminal_changes, segment_files = [], [], {}
+        mapping, terminal_changes, segment_files, removed_hydrogens = [], [], {}, []
         for i, (key, lines) in enumerate(segments.items()):
             name, segid = f'segment-{i}.pdb', f'P{i:03d}'
+            if hydrogens == 'rebuild':
+                lines, removed = remove_input_hydrogens(lines)
+                removed_hydrogens.extend(removed)
             mapped_lines, changes = map_terminal_oxygens(lines, last, segid)
             terminal_changes.extend(changes)
             segment_files[name] = '\n'.join(mapped_lines)+'\nEND\n'
@@ -275,6 +297,12 @@ def prepare(payload):
         pair = validate_pair(result_pdb, psf)
         terminal_check = verify_terminal_coordinates(result_pdb, terminal_changes)
         detail = dict(options=options, segments=mapping, input_sha256=digest(source_pdb), selection=selection,
+                      protonation=dict(method='manual topology and patches',
+                                       automatic_ph_assignment=False,
+                                       note='Target pH is recorded as context only. HIS and termini choices are applied; other residues retain their topology-defined states.'),
+                      hydrogen_handling=dict(mode=hydrogens, removed_input_atoms=len(removed_hydrogens),
+                                             removed_atoms=removed_hydrogens,
+                                             note='Rebuilt coordinates follow the selected topology, protonation and termini; original input and protein selection are preserved.' if hydrogens == 'rebuild' else 'Input hydrogens retained; incompatible names can cause coordinate warnings.'),
                       terminal_oxygen_mappings=terminal_changes, terminal_coordinate_check=terminal_check,
                       topologies=[dict(name=f['name'], sha256=digest(f['text'])) for f in topology],
                       engine=json.loads((work / 'engine.json').read_text()), log=log)

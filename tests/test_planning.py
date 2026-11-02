@@ -91,6 +91,12 @@ class ServerTests(unittest.TestCase):
 
     def test_cross_site_request_rejected(self):
         self.assertEqual(self.request('POST', '/api/plan', '{}', {'Origin':'https://example.com'})[0], 403)
+        self.assertEqual(self.request('POST', '/api/compatibility', '{}', {'Origin':'https://example.com'})[0], 403)
+
+    def test_compatibility_endpoint_needs_parameters(self):
+        status, data = self.request('POST','/api/compatibility',json.dumps(dict(pdb=PDB,psf=PSF,settings=dict(solvent_model='obc2'))))
+        self.assertEqual(status,200)
+        self.assertEqual(json.loads(data)['status'],'needs_input')
 
     def test_preparation_upload_endpoint(self):
         status, data = self.request('POST', '/api/prepare', json.dumps(dict(mode='upload',pdb=PDB,psf=PSF)))

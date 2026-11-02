@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-let plan = null, pdb = '', yaw = 0, pitch = 0, zoom = 1, dragging = null, revision = 0, prepared = null, preparing = false;
+let plan = null, pdb = '', yaw = 0, pitch = 0, zoom = 1, dragging = null, revision = 0, prepared = null, preparing = false, checking = false;
 const canvas = $('structure'), ctx = canvas.getContext('2d');
 const colors = ['#26785b','#d09843','#5188a3','#9c6d9c'];
 function invalidate() {
@@ -8,24 +8,32 @@ function invalidate() {
   $('status').textContent = 'Settings changed'; $('steps').replaceChildren();
   $('events').textContent = 'Propose a workflow to review the current input.';
   $('record').textContent = ''; $('structure-info').textContent = 'No current plan';
+  $('compatibility-status').textContent = 'Settings changed. Check OpenMM compatibility for the current inputs.';
   draw();
 }
-const preparationInputs = new Set(['pdb','psf','topologies','parameters','histidine','first-patch','last-patch','confirm-guess','prep-mode']);
-$('plan-form').addEventListener('input', event => {
+const preparationInputs = new Set(['pdb','psf','topologies','parameters','histidine','first-patch','last-patch','hydrogens','confirm-guess','prep-mode']);
+function settingsChanged(event) {
   if (preparationInputs.has(event.target.id)) {
     prepared = null; $('prep-downloads').hidden = true;
     $('prep-location').hidden = true;
     $('prep-status').textContent = 'Inputs changed. Prepare the files again.';
   }
   invalidate(); $('propose').disabled = !prepared || preparing;
-});
+  $('check-compatibility').disabled = !prepared || preparing || checking;
+}
+$('plan-form').addEventListener('input', settingsChanged);
+$('plan-form').addEventListener('change', settingsChanged);
+// Number-input wheel changes are easy to trigger while scrolling the page.
+$('plan-form').addEventListener('wheel', event => {
+  if (event.target.matches('input[type="number"]')) event.preventDefault();
+}, {passive:false});
 $('prep-mode').addEventListener('change', () => {
   const generate = $('prep-mode').value === 'generate';
   $('psf-field').hidden = generate; $('psf').disabled = generate; $('psf').required = !generate;
-  $('topology-field').hidden = !generate; $('topologies').disabled = !generate; $('topologies').required = generate;
+  $('topology-field').hidden = false; $('topologies').disabled = false; $('topologies').required = generate;
   $('generation-options').hidden = !generate;
   $('prepare').textContent = generate ? 'Generate PSF + PDB' : 'Check PSF + PDB pair';
-  $('prep-help').textContent = generate ? 'Protein-only selection is applied before psfgen: waters, ions and other non-protein components are excluded and recorded. Protein hydrogens are retained. Resolve chain gaps, alternate positions and custom/disulfide patches first. No minimization or solvation is performed.' : 'Upload files from the same preparation. Atom count and ordered identity must match. Existing coordinates and topology are retained; bonded terms and force-field parameters are not validated.';
+  $('prep-help').textContent = generate ? 'Protein-only selection is applied before psfgen: waters, ions and other non-protein components are excluded and recorded. Choose whether to retain input hydrogens or rebuild them with the selected topology. Resolve chain gaps, alternate positions and custom/disulfide patches first. No minimization or solvation is performed.' : 'Upload files from the same preparation. Atom count and ordered identity must match. Existing coordinates and topology are retained; bonded terms and force-field parameters are not validated.';
 });
 async function readFile(file, label) {
   if (!file || file.size > 5_000_000) throw Error(`Choose a ${label} file smaller than 5 MB.`);
@@ -39,9 +47,9 @@ $('prepare').addEventListener('click', async () => {
   $('prep-downloads').hidden = true;
   $('prep-location').hidden = true;
   const submittedRevision = revision, mode = $('prep-mode').value;
-  const options = {histidine:$('histidine').value,first:$('first-patch').value,last:$('last-patch').value};
+  const options = {histidine:$('histidine').value,first:$('first-patch').value,last:$('last-patch').value,hydrogens:$('hydrogens').value};
   const confirm_guess = $('confirm-guess').checked;
-  preparing = true; $('prepare').disabled = $('propose').disabled = true;
+  preparing = true; $('prepare').disabled = $('propose').disabled = $('check-compatibility').disabled = true;
   $('prep-status').textContent = mode === 'generate' ? 'Generating files…' : 'Checking the pair…';
   try {
     const inputPdb = await readFile($('pdb').files[0], 'PDB');
@@ -68,13 +76,57 @@ $('prepare').addEventListener('click', async () => {
       $('events').textContent += ` Protein selection retained ${selection.selected_atoms} input atoms; excluded ${selection.excluded_atoms} atoms${removed ? ` (${removed})` : ''}. Original input: source.pdb; protein selection: protein.pdb; exact psfgen inputs: segments/.`;
     }
     const terminalCheck = result.manifest.details.terminal_coordinate_check;
+    const hydrogenHandling = result.manifest.details.hydrogen_handling;
+    if (hydrogenHandling) {
+      $('events').textContent += hydrogenHandling.mode === 'rebuild' ? ` Removed ${hydrogenHandling.removed_input_atoms} input hydrogens before psfgen rebuilt them from the selected topology and protonation choices.` : ' Retained input hydrogens.';
+    }
     if (terminalCheck?.mapped_atoms) {
       $('events').textContent += ` Preserved ${terminalCheck.mapped_atoms} CTER oxygen coordinates using terminal-only O → OT1 / OXT → OT2 mapping.`;
     }
     $('record').textContent = JSON.stringify(result.manifest,null,2); draw();
   } catch(error) {
     if (submittedRevision === revision) { $('error').textContent = error.message; $('prep-status').textContent = 'Preparation needs attention.'; }
-  } finally { preparing = false; $('prepare').disabled = false; $('propose').disabled = !prepared; }
+  } finally { preparing = false; $('prepare').disabled = false; $('propose').disabled = !prepared; $('check-compatibility').disabled = !prepared || checking; }
+});
+
+function environmentSettings() {
+  if ($('solvent-model').value === 'deferred') return {solvent_model:'deferred',temperature_k:$('temperature').value};
+  return {solvent_model:$('solvent-model').value,salt_molar:$('salt-molar').value,
+    padding_nm:$('solvent-model').value === 'charmm_tip3p' ? $('padding-nm').value : 1,temperature_k:$('temperature').value};
+}
+function showCompatibility(result) {
+  const labels = {deferred:'Decide later',compatible:'Compatible in this OpenMM check',needs_input:'More files needed',requires_preparation:'Additional preparation required',failed:'Compatibility check failed',unavailable:'OpenMM unavailable',not_checked:'Not checked'};
+  $('compatibility-status').textContent = `${labels[result.status] || result.status}: ${result.message}` +
+    (result.openmm_version ? ` OpenMM ${result.openmm_version}; ${result.particles} particles.` : '') +
+    (result.required ? `\n${result.required.join('\n')}` : '') +
+    '\nProtonation is not validated by this check. Simulation readiness still requires review.';
+}
+$('solvent-model').addEventListener('change', () => {
+  const model = $('solvent-model').value;
+  $('salt-field').hidden = model === 'deferred';
+  $('padding-field').hidden = model !== 'charmm_tip3p';
+  $('padding-nm').disabled = model !== 'charmm_tip3p';
+  $('salt-molar').disabled = model === 'vacuum' || model === 'deferred';
+  if (model === 'vacuum') $('salt-molar').value = '0';
+  $('salt-help').textContent = model === 'charmm_tip3p' ? 'Target concentration for future water-box and ion preparation.' : model === 'vacuum' ? 'Salt is not used in vacuum.' : 'Implicit solvent uses salt screening; no ions are added.';
+});
+$('check-compatibility').addEventListener('click', async () => {
+  if (!prepared || preparing || checking) return;
+  const submittedRevision = revision, pair = prepared, settings = environmentSettings();
+  checking = true; $('check-compatibility').disabled = true;
+  $('compatibility-status').textContent = 'Checking the selected settings and files in OpenMM…';
+  try {
+    const [topologies,parameters] = await Promise.all([readFiles('topologies'),readFiles('parameters')]);
+    if (revision !== submittedRevision) return;
+    const response = await fetch('/api/compatibility', {method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({pdb:pair.pdb,psf:pair.psf,topologies,parameters,settings})});
+    const result = await response.json();
+    if (revision !== submittedRevision) return;
+    if (!response.ok) throw Error(result.error || 'Compatibility check failed.');
+    showCompatibility(result);
+  } catch(error) {
+    if (revision === submittedRevision) $('compatibility-status').textContent = error.message;
+  } finally { checking = false; $('check-compatibility').disabled = !prepared || preparing; }
 });
 function download(name, content, mime='text/plain') {
   const url = URL.createObjectURL(new Blob([content], {type:mime}));
@@ -100,15 +152,20 @@ $('plan-form').addEventListener('submit', async event => {
   $('propose').disabled = true;
   try {
     if (!prepared) throw Error('Prepare or upload the PSF/PDB pair first.');
-    pdb = prepared.pdb;
+    const pair = prepared;
+    pdb = pair.pdb;
+    const settings = {...environmentSettings(),temperature_k:$('temperature').value,duration_ps:$('duration').value,
+      equilibration_ps:$('equilibration').value,timestep_fs:$('timestep').value};
+    const [topologies,parameters] = await Promise.all([readFiles('topologies'),readFiles('parameters')]);
+    if (revision !== submittedRevision) return;
     const response = await fetch('/api/plan', {method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({pdb, psf:prepared.psf, request:$('request').value, settings:{
-        temperature_k:$('temperature').value, duration_ps:$('duration').value,
-        equilibration_ps:$('equilibration').value, timestep_fs:$('timestep').value}})});
+      body:JSON.stringify({pdb, psf:pair.psf, preparation_options:pair.manifest.details.options || {},
+        topologies,parameters,check_compatibility:true,request:$('request').value,settings})});
     const result = await response.json();
     if (revision !== submittedRevision) return;
     if (!response.ok) throw Error(result.error || 'Could not create a plan.');
     plan = result; yaw = pitch = 0; zoom = 1;
+    showCompatibility(result.compatibility);
     $('status').textContent = 'Proposed'; $('export').disabled = false;
     $('structure-info').textContent = `${plan.structure.atom_count} atoms · ${plan.structure.residue_count} residues · ${plan.structure.chains.length} chains`;
     for (const step of plan.steps) {

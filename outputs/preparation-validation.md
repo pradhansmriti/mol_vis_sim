@@ -37,4 +37,4 @@ The comparator matches atoms by segment/residue/name instead of file byte order,
 - Hydrogen-free villin outputs: `runs/preparations/981fef7c-47ef-4c43-a41b-beebb1742f24/`.
 - VMD scripts: `work/preparation-validation/{1UBQ,1VII}/vmd-reference/reference.tcl`.
 
-OpenMM parameter loading, energy evaluation, and minimization have not been run. OpenMM is not installed in the current interpreter. Do not label these preparations simulation-ready yet. The regression suite passes 34 tests with the official standalone backend, including comparator tests for atom reordering, coordinate/charge/connectivity changes, and malformed topology indices.
+At this initial comparison stage, OpenMM parameter loading, energy evaluation, and minimization had not been run. The subsequent [hydrogen rebuilding and OpenMM report](openmm-validation.md) records those completed diagnostic checks. The initial regression suite passed 34 tests with the official standalone backend, including comparator tests for atom reordering, coordinate/charge/connectivity changes, and malformed topology indices. Simulation readiness remains a separate review.

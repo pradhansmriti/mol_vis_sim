@@ -175,14 +175,18 @@ def run_cases(args):
         if not re.fullmatch(r'[A-Za-z0-9_-]+',name): raise ValueError('Use a simple case name.')
         source=Path(filename).read_text()
         result=prepare(dict(mode='generate',pdb=source,topologies=[dict(name=Path(args.topology).name,text=topology)],
-                            confirm_guess=True,options=dict(histidine='HSE',first='NTER',last='CTER')))
+                            confirm_guess=True,options=dict(histidine='HSE',first='NTER',last='CTER',hydrogens=args.hydrogens)))
         case=out/name;case.mkdir(exist_ok=True)
         app=Path(result['storage']['directory'])
         ref=case/'vmd-reference';ref.mkdir(exist_ok=True)
-        for filename,content in [('source.pdb',source),('topology.rtf',topology),('reference.tcl',VMD_SCRIPT)]:
+        script = VMD_SCRIPT
+        if args.hydrogens == 'rebuild':
+            script = script.replace('set protein [atomselect $molecule protein]', 'set protein [atomselect $molecule "protein and not hydrogen"]')
+        for filename,content in [('source.pdb',source),('topology.rtf',topology),('reference.tcl',script)]:
             (ref/filename).write_text(content)
         entry=dict(source_sha256=digest(source),topology_sha256=digest(topology),
                    application_directory=str(app),engine=result['manifest']['details']['engine'],
+                   hydrogen_handling=result['manifest']['details']['hydrogen_handling'],
                    checks=inspect_preparation(app),vmd_comparison=dict(status='not_run',reason='VMD executable/reference not supplied'),
                    reference_directory=str(ref))
         if args.vmd:
@@ -213,6 +217,7 @@ def main():
     run=sub.add_parser('run');run.add_argument('--psfgen',required=True);run.add_argument('--topology',required=True)
     run.add_argument('--case',action='append',required=True,help='NAME=/path/to/input.pdb')
     run.add_argument('--output',default='work/preparation-validation');run.add_argument('--vmd')
+    run.add_argument('--hydrogens', choices=['retain','rebuild'], default='retain')
     compare=sub.add_parser('compare');compare.add_argument('application');compare.add_argument('reference')
     args=parser.parse_args()
     if args.command=='run': run_cases(args)
