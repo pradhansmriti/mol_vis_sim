@@ -121,7 +121,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request('GET',urls['prepared.pdb'].replace('prepared.pdb','../../README.md'))[0],404)
         self.assertEqual(self.request('GET','/api/preparations/00000000-0000-0000-0000-000000000000/files/prepared.pdb')[0],404)
 
-    @unittest.skipUnless(importlib.util.find_spec('psfgen'), 'Standalone psfgen is not installed')
+    @unittest.skipUnless(os.environ.get('MOLVIS_PSFGEN') or importlib.util.find_spec('psfgen'), 'No native psfgen backend is configured')
     def test_native_generation_endpoint(self):
         status, data = self.request('POST', '/api/prepare', json.dumps(generation_payload()))
         self.assertEqual(status,200,data.decode())

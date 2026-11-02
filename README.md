@@ -14,6 +14,14 @@ python3 -m molvis --psfgen /absolute/path/to/NAMD/psfgen
 
 Alternatively set `MOLVIS_PSFGEN` to that executable path before starting the server. This route uses the psfgen executable shipped with NAMD; it does not start NAMD dynamics or require VMD. Obtain the official package separately from UIUC. The executable must be approved to run by your operating system. The app does not change OS security settings. The adapter requires psfgen 2.0+, records the reported version and executable hash, and rejects engine errors even if the process exits with status zero. Only controlled filenames and validated preparation choices enter its Tcl script. Without this option, the existing Python-library backend remains selected.
 
+The official NAMD 3.0.3 Mac package's psfgen 2.0 executable was verified with our ubiquitin example. To launch that local configuration again:
+
+```sh
+python3 -m molvis --port 8766 --psfgen "$HOME/Downloads/NAMD_3.0.3_MacOS-universal-multicore/psfgen"
+```
+
+The complete 26-test suite passes with this executable and with the legacy library backend. The official executable removes the AUTO/PATCH parser diagnostic for the supplied CHARMM36 topology. Terminal O/OXT naming warnings remain a separate unresolved issue; passing preparation tests does not imply simulation readiness.
+
 ```sh
 python3 -m molvis
 ```

@@ -1,5 +1,36 @@
 # Standalone psfgen core investigation — 2026-10-29
 
+## Official executable verified — 2026-11-02
+
+After restoration and user approval in macOS, the official executable starts and
+prints `PSFGEN 2.0 from NAMD 3.0.3 for MacOS-ARM64-multicore`.
+Its executable SHA256 matches the archive member recorded below:
+`7878f0f6f55a27f3404b2c7f1345418202836023469783e4e2c1ac5aa408f495`.
+
+The application's standalone adapter successfully prepared local 1UBQ using
+unmodified `top_all36_prot.rtf`, protein-only selection, HSE/NTER/CTER choices,
+and retained the provided `par_all36m_prot.prm` in the result bundle. The latter
+is archived, not loaded or validated by psfgen.
+
+Saved preparation ID: `addea011-9777-4d1a-8f4e-fb76e075e575`.
+The pair contains 1,231 atoms and passes ordered PSF/PDB atom matching.
+All bond, angle, dihedral, improper and CMAP tuple multisets match the earlier
+Python-wrapper preparation. The PDB is byte-for-byte identical. The AUTO/PATCH
+parser error is absent; GLY76 O/OXT coordinate-assignment warnings remain, with
+two non-hydrogen coordinates still guessed. This upgrade does not resolve those
+terminal naming warnings or establish simulation readiness.
+
+The local platform can now use this official executable via `--psfgen`; the
+application does not need VMD or a separately installed Tcl runtime for this
+prebuilt distribution. The legacy Python-library route remains available when
+no executable is configured. The hosted website demo remains unchanged.
+
+The full 26-test suite passed separately using the official executable with
+standard-library Python, and using the legacy library in `.prep-env`. The local
+platform was started on port 8766 with the official executable explicitly
+selected. On future restarts, retain the `--psfgen` argument (or its environment
+variable equivalent) to keep using this backend.
+
 ## Official download follow-up — 2026-11-01
 
 The user downloaded the official **NAMD 3.0.3 MacOS universal multicore binary

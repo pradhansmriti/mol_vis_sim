@@ -178,7 +178,7 @@ class PairTests(StorageIsolation, unittest.TestCase):
                 prepare(generation_payload())
 
 
-@unittest.skipUnless(importlib.util.find_spec('psfgen'), 'Standalone psfgen is not installed in this Python environment')
+@unittest.skipUnless(os.environ.get('MOLVIS_PSFGEN') or importlib.util.find_spec('psfgen'), 'No native psfgen backend is configured')
 class NativePreparationTests(StorageIsolation, unittest.TestCase):
     def test_generation_with_crystal_water_saves_original_and_protein_selection(self):
         water = pdb_atom(9,'O',(9,0,0),residue=101).replace('ALA','HOH').replace('ATOM  ','HETATM')
@@ -195,7 +195,14 @@ class NativePreparationTests(StorageIsolation, unittest.TestCase):
         result = prepare(generation_payload())
         self.assertEqual(result['structure']['atom_count'],5)
         self.assertIn('HN',[a['name'] for a in result['structure']['atoms']])
-        self.assertEqual(result['manifest']['details']['engine']['version'],'1.0.5')
+        engine = result['manifest']['details']['engine']
+        if os.environ.get('MOLVIS_PSFGEN'):
+            self.assertGreaterEqual(int(engine['version'].split('.')[0]),2)
+            self.assertEqual(engine['name'],'standalone psfgen executable')
+            self.assertEqual(len(engine['executable_sha256']),64)
+            self.assertTrue((Path(result['storage']['directory'])/'prepare.tcl').is_file())
+        else:
+            self.assertEqual(engine['version'],'1.0.5')
         saved = Path(result['storage']['directory'])
         self.assertEqual((saved/'source.pdb').read_text(),PDB)
         self.assertEqual((saved/'topologies'/'0-test.rtf').read_text(),RTF)
