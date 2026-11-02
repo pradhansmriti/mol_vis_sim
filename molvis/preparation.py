@@ -125,6 +125,43 @@ def select_protein(pdb):
                          excluded_by_residue=excluded, protein_pdb_sha256=digest(protein))
 
 
+def map_terminal_oxygens(lines, last_patch, segid):
+    """Change only CTER endpoint names; never modify the supplied coordinates."""
+    if last_patch != 'CTER':
+        return lines, []
+    terminal_id = lines[-1][22:27].strip()
+    terminal = [line for line in lines if line[22:27].strip() == terminal_id]
+    names = {line[12:16].strip() for line in terminal}
+    aliases = {'O': 'OT1', 'OXT': 'OT2'}
+    for old, new in aliases.items():
+        if old in names and new in names:
+            raise ValueError(f'Ambiguous CTER oxygen names in segment {segid}, residue {terminal_id}: both {old} and {new} are present.')
+    output, changes = [], []
+    for line in lines:
+        old = line[12:16].strip()
+        if line[22:27].strip() == terminal_id and old in aliases:
+            new = aliases[old]
+            changes.append(dict(segment=segid, chain=line[21:22].strip(),
+                                input_segment=line[72:76].strip(), residue_id=terminal_id,
+                                residue=line[17:20].strip(), patch='CTER', source_name=old,
+                                target_name=new, coordinates_angstrom=[float(line[i:i+8]) for i in (30,38,46)]))
+            line = line[:12]+f'{new:^4}'+line[16:]
+        output.append(line)
+    return output, changes
+
+
+def verify_terminal_coordinates(pdb, changes):
+    atoms = {(a['segment_id'], a['residue_id'], a['name']): a for a in inspect_pdb(pdb)['atoms']}
+    maximum = 0.0
+    for change in changes:
+        atom = atoms.get((change['segment'], change['residue_id'], change['target_name']))
+        expected = change['coordinates_angstrom']
+        if atom is None or any(abs(a-b) > 0.00051 for a,b in zip(atom['xyz'],expected)):
+            raise ValueError('psfgen did not preserve a mapped CTER oxygen coordinate; preparation was not accepted.')
+        maximum = max(maximum, math.dist(atom['xyz'],expected))
+    return dict(mapped_atoms=len(changes), coordinates_preserved=True, max_displacement_angstrom=maximum)
+
+
 def prepare(payload):
     mode = payload.get('mode')
     pdb = text_file(payload.get('pdb'), 'PDB')
@@ -150,8 +187,6 @@ def prepare(payload):
         segments.setdefault(key, [])
     if len(segments) > 99:
         raise ValueError('At most 99 protein segments are supported.')
-    if any(not {'N', 'CA', 'C', 'O'} <= names for names in residues.values()):
-        raise ValueError('A residue is missing backbone N/CA/C/O atoms. Repair missing residues or heavy atoms explicitly before generation.')
     if any(not re.fullmatch(r'-?\d+', key[2]) for key in residues):
         raise ValueError('Resolve residue insertion codes before generation.')
     for line in pdb.splitlines():
@@ -183,6 +218,14 @@ def prepare(payload):
     options = dict(histidine=histidine, first=first, last=last)
     if payload.get('confirm_guess') is not True:
         raise ValueError('Confirm hydrogen/missing-atom coordinate generation and the displayed protonation and termini choices.')
+    for key, lines in segments.items():
+        terminal_id = lines[-1][22:27].strip()
+        for residue_key, names in residues.items():
+            if residue_key[:2] != key:
+                continue
+            oxygen_present = 'O' in names or (last == 'CTER' and residue_key[2] == terminal_id and 'OT1' in names)
+            if not {'N', 'CA', 'C'} <= names or not oxygen_present:
+                raise ValueError('A residue is missing backbone N/CA/C/O atoms. Repair missing residues or heavy atoms explicitly before generation.')
     with TemporaryDirectory(prefix='molvis-prep-') as directory:
         work = Path(directory)
         config = dict(options=options, topologies=[], segments=[])
@@ -190,10 +233,13 @@ def prepare(payload):
             name = f'topology-{i}.rtf'
             (work / name).write_text(item['text'])
             config['topologies'].append(name)
-        mapping = []
+        mapping, terminal_changes, segment_files = [], [], {}
         for i, (key, lines) in enumerate(segments.items()):
             name, segid = f'segment-{i}.pdb', f'P{i:03d}'
-            (work / name).write_text('\n'.join(lines)+'\nEND\n')
+            mapped_lines, changes = map_terminal_oxygens(lines, last, segid)
+            terminal_changes.extend(changes)
+            segment_files[name] = '\n'.join(mapped_lines)+'\nEND\n'
+            (work / name).write_text(segment_files[name])
             config['segments'].append(dict(segid=segid, pdb=name))
             mapping.append(dict(chain=key[0], input_segment=key[1], output_segment=segid))
         (work / 'config.json').write_text(json.dumps(config))
@@ -227,15 +273,17 @@ def prepare(payload):
                 raise ValueError('psfgen did not produce a supported PSF/PDB pair.')
         result_pdb, psf = (work / 'prepared.pdb').read_text(), (work / 'prepared.psf').read_text()
         pair = validate_pair(result_pdb, psf)
+        terminal_check = verify_terminal_coordinates(result_pdb, terminal_changes)
         detail = dict(options=options, segments=mapping, input_sha256=digest(source_pdb), selection=selection,
+                      terminal_oxygen_mappings=terminal_changes, terminal_coordinate_check=terminal_check,
                       topologies=[dict(name=f['name'], sha256=digest(f['text'])) for f in topology],
                       engine=json.loads((work / 'engine.json').read_text()), log=log)
         if executable:
             detail['script'] = (work / 'prepare.tcl').read_text()
-        return preparation_result(result_pdb, psf, mode, parameters, pair, detail, topology, source_pdb=source_pdb, protein_pdb=pdb)
+        return preparation_result(result_pdb, psf, mode, parameters, pair, detail, topology, source_pdb=source_pdb, protein_pdb=pdb, segment_files=segment_files)
 
 
-def preparation_result(pdb, psf, mode, parameters, pair, detail, topologies, source_pdb=None, protein_pdb=None):
+def preparation_result(pdb, psf, mode, parameters, pair, detail, topologies, source_pdb=None, protein_pdb=None, segment_files=None):
     preparation_id = str(uuid4())
     root = output_root()
     destination = root / preparation_id
@@ -256,6 +304,8 @@ def preparation_result(pdb, psf, mode, parameters, pair, detail, topologies, sou
         files['source.pdb'] = source_pdb
     if protein_pdb is not None:
         files['protein.pdb'] = protein_pdb
+    for name, text in (segment_files or {}).items():
+        files[f'segments/{name}'] = text
     if detail:
         files['psfgen.log'] = detail['log']
         if 'script' in detail:

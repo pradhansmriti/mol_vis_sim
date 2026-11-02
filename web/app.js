@@ -65,7 +65,11 @@ $('prepare').addEventListener('click', async () => {
     const selection = result.manifest.details.selection;
     if (selection) {
       const removed = Object.entries(selection.excluded_by_residue).map(([name,counts]) => `${counts.residues} ${name} residues`).join(', ');
-      $('events').textContent += ` Protein selection retained ${selection.selected_atoms} input atoms; excluded ${selection.excluded_atoms} atoms${removed ? ` (${removed})` : ''}. Original input: source.pdb; psfgen input: protein.pdb.`;
+      $('events').textContent += ` Protein selection retained ${selection.selected_atoms} input atoms; excluded ${selection.excluded_atoms} atoms${removed ? ` (${removed})` : ''}. Original input: source.pdb; protein selection: protein.pdb; exact psfgen inputs: segments/.`;
+    }
+    const terminalCheck = result.manifest.details.terminal_coordinate_check;
+    if (terminalCheck?.mapped_atoms) {
+      $('events').textContent += ` Preserved ${terminalCheck.mapped_atoms} CTER oxygen coordinates using terminal-only O → OT1 / OXT → OT2 mapping.`;
     }
     $('record').textContent = JSON.stringify(result.manifest,null,2); draw();
   } catch(error) {

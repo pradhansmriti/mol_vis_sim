@@ -22,3 +22,6 @@ This is an illustrative request, not an instruction to launch a simulation yet.
 See simulation-workspace-spec.md for the current specification. tutorial-workflow-map.md is the earlier reference coverage map; its teaching-first interaction is superseded by this direction.
 
 Generation currently accepts standard proteins only; lipid systems need external preparation and PSF/PDB upload.
+
+## C-terminal oxygen preparation note
+For CTER-patched endpoints, map PDB O/OXT to CHARMM OT1/OT2 before coordinate assignment and verify that their measured positions survive generation. Keep original names in source.pdb/protein.pdb, save exact mapped segment inputs, and record transformations in the manifest. See [the verification note](terminal-oxygen-mapping.md). This does not apply to internal oxygens, NONE termini, or uploaded prepared pairs.

@@ -20,7 +20,7 @@ The official NAMD 3.0.3 Mac package's psfgen 2.0 executable was verified with ou
 python3 -m molvis --port 8766 --psfgen "$HOME/Downloads/NAMD_3.0.3_MacOS-universal-multicore/psfgen"
 ```
 
-The complete 26-test suite passes with this executable and with the legacy library backend. The official executable removes the AUTO/PATCH parser diagnostic for the supplied CHARMM36 topology. Terminal O/OXT naming warnings remain a separate unresolved issue; passing preparation tests does not imply simulation readiness.
+The complete 30-test suite passes with this executable and with the legacy library backend. The official executable removes the AUTO/PATCH parser diagnostic for the supplied CHARMM36 topology. CTER terminal O/OXT naming is now handled by the mapping described below; passing preparation tests does not imply simulation readiness.
 
 ```sh
 python3 -m molvis
@@ -38,6 +38,8 @@ Other compatible CHARMM-format topology files can be uploaded instead, with thei
 
 - **Generate PSF + PDB:** upload a protein PDB and the matching CHARMM residue topology files (`.rtf`). Review the HIS alias (HSE/HSD/HSP), first/last residue patches (NTER/CTER or NONE), and coordinate-guessing consent. Before psfgen, the backend selects protein residues and writes `protein.pdb`, excluding crystallographic waters, ions and other non-protein components. Existing protein hydrogens are retained. The selection uses standard residue names and peptide-backbone recognition as a conservative approximation of VMD `atomselect top "protein"`; unfamiliar backbone-containing residues are flagged for review rather than silently discarded. The manifest and activity log record retained atom counts and excluded components. Existing PSF/PDB uploads are never filtered. The standalone backend splits chains/segments, maps ILE CD1 to CHARMM CD, builds atoms, assigns coordinates, and writes an X-PLOR PSF and matching PDB. Explicitly named histidine variants are retained. Missing backbone atoms, residue-number gaps, reused TER-separated segment IDs, insertion codes, alternate positions, and nonstandard residues require external resolution. Disulfide/custom patches are not inferred. No solvation or minimization occurs.
 - **Upload existing files:** provide the PSF and PDB from the same preparation. Files are retained unchanged. Checks cover atom count, ordered residue/atom identity, segment IDs when present, finite charges/masses and coordinates. Bonded terms and parameter compatibility are not yet validated.
+
+**C-terminal oxygen mapping:** With the `CTER` patch, only the final residue in each segment receives `O → OT1` and `OXT → OT2` naming in the psfgen input. The measured coordinates are preserved and checked after generation. Internal oxygens, `NONE` termini, and uploaded pairs are unchanged. The manifest records each mapping; exact mapped inputs are included under `segments/`. See [the correction note](outputs/terminal-oxygen-mapping.md) for the reason and ubiquitin verification.
 
 Both routes accept optional parameter-file uploads, retained in the downloadable ZIP for the future runner. Download PDB/PSF individually or a preparation bundle containing files, hashes, options, segment mapping, topology/parameter uploads and the engine log when generated. A checked pair is **not** marked simulation-ready. Matching CHARMM parameters, solvent selection and scientific validation remain required; PSF input is never assigned Amber14/OBC2 settings automatically.
 
@@ -60,7 +62,8 @@ mol_vis_sim/runs/preparations/<preparation-id>/
   manifest.json
   preparation.zip
   source.pdb          # unmodified original input, for generated pairs
-  protein.pdb         # protein-only input passed to psfgen
+  protein.pdb         # protein selection, with original atom names
+  segments/           # exact per-segment psfgen inputs, with terminal naming
   psfgen.log          # for generated pairs
   topologies/        # supplied topology files, for generation
   parameters/        # supplied parameter files, when provided

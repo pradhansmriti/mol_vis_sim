@@ -12,7 +12,7 @@ from unittest.mock import patch
 import zipfile
 
 from molvis.planning import create_plan, inspect_pdb
-from molvis.preparation import prepare, validate_pair, select_protein
+from molvis.preparation import prepare, validate_pair, select_protein, map_terminal_oxygens, verify_terminal_coordinates
 from molvis.standalone_psfgen import write_script
 
 
@@ -63,6 +63,29 @@ class StorageIsolation:
 
 
 class PairTests(StorageIsolation, unittest.TestCase):
+    def test_cter_mapping_is_endpoint_only_and_preserves_pdb_columns(self):
+        lines = [pdb_atom(1,'O',(0,1,2),residue=1),
+                 pdb_atom(2,'O',(3,4,5),residue=2),pdb_atom(3,'OXT',(6,7,8),residue=2)]
+        mapped, changes = map_terminal_oxygens(lines,'CTER','P000')
+        self.assertEqual(mapped[0],lines[0])
+        self.assertEqual([line[12:16].strip() for line in mapped],['O','OT1','OT2'])
+        for before, after in zip(lines,mapped):
+            self.assertEqual(before[:12],after[:12])
+            self.assertEqual(before[16:],after[16:])
+        self.assertEqual([c['source_name'] for c in changes],['O','OXT'])
+        self.assertEqual(verify_terminal_coordinates('\n'.join(mapped),changes)['max_displacement_angstrom'],0)
+        self.assertEqual(map_terminal_oxygens(lines,'NONE','P000'),(lines,[]))
+        self.assertEqual(map_terminal_oxygens(mapped,'CTER','P000'),(mapped,[]))
+
+    def test_terminal_coordinate_check_rejects_changed_coordinates(self):
+        mapped, changes = map_terminal_oxygens([pdb_atom(1,'O',(1,2,3))],'CTER','P000')
+        changed = mapped[0][:30]+f'{9.:8.3f}'+mapped[0][38:]
+        with self.assertRaisesRegex(ValueError,'did not preserve'):
+            verify_terminal_coordinates(changed,changes)
+
+    def test_cter_mapping_rejects_ambiguous_aliases(self):
+        with self.assertRaisesRegex(ValueError,'Ambiguous CTER'):
+            map_terminal_oxygens([pdb_atom(1,'O',(1,2,3)),pdb_atom(2,'OT1',(3,2,1))],'CTER','P000')
     def test_standalone_executable_adapter_records_version_and_hash(self):
         executable = Path(self.output.name)/'fake-psfgen'
         executable.write_text(f'#!{sys.executable}\nfrom pathlib import Path\n'
@@ -180,6 +203,33 @@ class PairTests(StorageIsolation, unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get('MOLVIS_PSFGEN') or importlib.util.find_spec('psfgen'), 'No native psfgen backend is configured')
 class NativePreparationTests(StorageIsolation, unittest.TestCase):
+    def test_cter_native_generation_preserves_terminal_oxygens(self):
+        terminal = '\n'.join(pdb_atom(i,name,xyz,residue=2) for i,(name,xyz) in enumerate([
+            ('N',(4,0,0)),('CA',(5.45,0,0)),('C',(6,1.4,0)),('O',(5.7,2.5,0)),('OXT',(7.1,1.2,0))],5))
+        source = PDB.replace('END',terminal+'\nEND')
+        topology = RTF.rsplit('END',1)[0]+'''PRES CTER -0.5
+GROUP
+ATOM C C 0.5
+ATOM OT1 O -0.5
+ATOM OT2 O -0.5
+DELETE ATOM O
+BOND C OT1 C OT2
+END
+'''
+        result = prepare(generation_payload() | dict(pdb=source,topologies=[dict(name='terminal-test.rtf',text=topology)],
+                         options=dict(first='NONE',last='CTER',histidine='HSE')))
+        details = result['manifest']['details']
+        self.assertEqual(details['terminal_coordinate_check']['mapped_atoms'],2)
+        self.assertEqual(details['terminal_coordinate_check']['max_displacement_angstrom'],0)
+        output = {(a['residue_id'],a['name']):a['xyz'] for a in result['structure']['atoms']}
+        self.assertEqual(output[('2','OT1')],[5.7,2.5,0])
+        self.assertEqual(output[('2','OT2')],[7.1,1.2,0])
+        self.assertEqual(output[('1','O')],[1.7,2.5,0])
+        self.assertNotIn('failed to set coordinate for atom O',details['log'])
+        saved = Path(result['storage']['directory'])
+        self.assertEqual((saved/'source.pdb').read_text(),source)
+        self.assertIn('OXT',(saved/'protein.pdb').read_text())
+        self.assertIn('OT2',(saved/'segments'/'segment-0.pdb').read_text())
     def test_generation_with_crystal_water_saves_original_and_protein_selection(self):
         water = pdb_atom(9,'O',(9,0,0),residue=101).replace('ALA','HOH').replace('ATOM  ','HETATM')
         source = PDB.replace('END',water+'\nEND')
