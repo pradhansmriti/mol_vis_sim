@@ -4,9 +4,9 @@ The agreed product design, specification, and interactive preview are in [output
 
 ## Preview
 
-![Molecular workspace with protein preparation, structure inspection, workflow planning, and deferred solvation settings](docs/images/workspace-preview.jpg)
+![Molecular workspace with protein preparation, workflow planning, and live OpenMM temperature, energy, and minimization plots](docs/images/workspace-preview.jpg)
 
-Current local interface · updated November 2, 2026. This preview is refreshed with interface changes.
+Current local interface with measured villin readiness-run traces · updated November 2, 2026. This preview is refreshed with interface changes.
 
 ## Run locally
 
@@ -79,7 +79,7 @@ The interface shows the absolute server folder after preparation, and the respon
 
 The default root is `<repository>/runs/preparations`, independent of the launch directory. Set `MOLVIS_OUTPUT_DIR` before starting the server to use a different root. The server must have write access. Results are published only when the complete folder has been saved; a write failure returns an error rather than claiming success. Temporary scratch files are removed after each request. Each input file is limited to 5 MB, the request to 30 MB, and topology/parameter uploads to 12 files of each kind. Topology and parameter data are not executed as scripts. The server remains bound to loopback.
 
-The interface supports preparation, planning and structure inspection. It does not interpret natural-language requests or execute OpenMM. A separate local diagnostic below checks CHARMM parameter loading and bounded vacuum minimization. Temperature/energy data and trajectory controls will become available with the runner. A parsed PDB is not a scientifically validated structure. Multiple models, alternate locations, and duplicate atoms require explicit resolution; non-protein components are retained in existing pairs and flagged for review. mmCIF is not yet supported.
+The interface supports preparation, planning and structure inspection. It does not interpret natural-language requests or launch production dynamics; bounded OpenMM readiness tests are available. A separate local diagnostic below checks CHARMM parameter loading and bounded vacuum minimization. Live energy and temperature traces are available for bounded readiness runs; production trajectory controls remain future work. A parsed PDB is not a scientifically validated structure. Multiple models, alternate locations, and duplicate atoms require explicit resolution; non-protein components are retained in existing pairs and flagged for review. mmCIF is not yet supported.
 
 The default request names ubiquitin as an example; it does not identify the uploaded protein. Supply your own ubiquitin PDB to plan that example. Production duration is separate from the optional preparatory equilibration duration. No equilibration is silently added.
 
@@ -103,7 +103,15 @@ node --check web/app.js
 
 ## Local OpenMM diagnostic
 
-Solvation and salt default to **Decide later**. After protein preparation and structure review, open **Later: solvation, salt and OpenMM compatibility** to choose an environment. Until then, exported plans leave solvent method, salt and box settings unset and record compatibility as deferred. Select vacuum, implicit OBC2, implicit GBn2, or explicit CHARMM-modified TIP3P, and upload matching CHARMM parameter/topology files to check compatibility. For vacuum and implicit models, an isolated worker actually creates the OpenMM System with HBonds constraints and evaluates finite energy/forces on the CPU. Implicit salt is Debye screening, not added ions. The explicit option records salt and padding but reports `requires_preparation`: it does not build water/ions or validate a periodic box yet. Missing files, engine availability, and parameter failures have distinct statuses. Proposing a workflow repeats the check for the submitted settings and stores its result and input hashes in the exported plan. Changed inputs invalidate the displayed check.
+### Live measurements
+
+After preparation and solvent selection, **Run + plot readiness (100 steps)** starts an OpenMM worker in the background. The **Live energy and temperature** panel updates while it runs: minimization potential energy versus optimizer report number, then measured temperature and potential/kinetic/total energy versus simulation time. Dynamics are sampled every 10 steps (0.02 ps at 2 fs); the target temperature is a dashed reference line. Temperature is not reported during minimization. Hover over points or use the latest-values table to inspect readings.
+
+Runs use a frozen copy of the submitted settings. **Stop run** terminates the worker and retains partial measurements. Refreshing reconnects to the last run; `/?run=<run-id>#live-monitor` opens a saved trace. Interrupted server sessions are labeled and are not automatically resumed. Live CSV/JSONL downloads remain available, including partial traces, and completed environment ZIPs include measurements plus OpenMM's dynamics CSV. Records persist under `runs/live/<id>/`; successful environment artifacts remain in `runs/environments/<id>/`. Only one live readiness run is allowed at a time.
+
+These are real bounded readiness measurements, not an implementation of the proposed full production duration or a declaration of stabilization. See [the live visualization validation](outputs/live-measurements.md).
+
+Solvation and salt default to **Decide later**. After protein preparation and structure review, open **Later: solvation, salt and OpenMM compatibility** to choose an environment. Until then, exported plans leave solvent method, salt and box settings unset and record compatibility as deferred. Select vacuum, implicit OBC2, implicit GBn2, or explicit CHARMM-modified TIP3P, and upload matching CHARMM parameter/topology files to check compatibility. For vacuum and implicit models, an isolated worker actually creates the OpenMM System with HBonds constraints and evaluates finite energy/forces on the CPU. Implicit salt defaults to **0.2 M ionic screening**, not added ions. OpenMM OBC2/GBn2 are generalized Born models, not the exact NAMD GBIS implementation. Explicit CHARMM-modified TIP3P now builds a cubic periodic water box using your local `toppar_water_ions.str`, preserving the supplied protein PSF, types, charges, CMAP terms and coordinates. PME uses a 1.2 nm cutoff and switching from 1.0 nm. Explicit salt is fixed at 0 M, `neutralize=False`, and no Na+, Cl- or counterions are added. Missing files, engine availability, and parameter failures have distinct statuses. Proposing a workflow repeats the check for the submitted settings and stores its result and input hashes in the exported plan. Changed inputs invalidate the displayed check. **Run + plot readiness (100 steps)** additionally performs minimization (20 iterations per optimizer pass; constraint enforcement may restart it), initializes velocities at the selected temperature, and advances 100 NVT steps at the selected timestep. Both compatibility and readiness outputs are saved separately in `runs/environments/<id>/` with direct downloads for the solvated PSF/PDB, serialized System, manifest and ZIP; readiness also saves final coordinates and State XML. This does not run the proposed full production duration. See [water-box and readiness results](outputs/waterbox-readiness.md).
 
 There is no target-pH input. Histidine HSE/HSD/HSP and first/last patches control generation; other amino acids retain the supplied topology's states. This is not automatic pKa prediction, site-specific titration, or protonation validation. Changing protonation choices requires preparing the files again. Uploaded pairs retain their existing chemistry. The server uses `.venv/bin/python` when present for compatibility workers; set `MOLVIS_OPENMM_PYTHON` to select another installed environment. See [the solvent compatibility results](outputs/solvent-compatibility.md).
 
@@ -125,7 +133,7 @@ Each new output directory contains `report.json` (settings, input hashes, engine
 
 The native-generation test runs when psfgen is installed, and is skipped in the dependency-free environment. It uses a synthetic topology for testing only, generates an added atom, checks the pair, reuploads it, and creates a plan.
 
-Connect a validated OpenMM runner to these plan/step/event records: CHARMM parameter validation, preparation review, minimization, optional equilibration, production, trajectory and state reporters, and reproducibility metadata. Add temperature and energy tabs driven by recorded samples. Scientific validation remains separate from execution success.
+Extend the bounded live readiness runner into a reviewed production workflow using these plan/step/event records: CHARMM parameter validation, preparation review, minimization, optional equilibration, production, trajectory and state reporters, and reproducibility metadata. Add temperature and energy tabs driven by recorded samples. Scientific validation remains separate from execution success.
 
 Proposed force-field and solvent settings follow the supported combinations described in the [OpenMM application guide](https://docs.openmm.org/latest/userguide/application/02_running_sims.html). They have not yet been validated against a ubiquitin run or the NAMD tutorial.
 

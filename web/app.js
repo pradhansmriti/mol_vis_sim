@@ -1,5 +1,7 @@
 const $ = id => document.getElementById(id);
 let plan = null, pdb = '', yaw = 0, pitch = 0, zoom = 1, dragging = null, revision = 0, prepared = null, preparing = false, checking = false;
+let implicitSalt = '0.2', previousSolvent = 'deferred';
+let liveRunning = false, activeRun = null;
 const canvas = $('structure'), ctx = canvas.getContext('2d');
 const colors = ['#26785b','#d09843','#5188a3','#9c6d9c'];
 function invalidate() {
@@ -9,6 +11,7 @@ function invalidate() {
   $('events').textContent = 'Propose a workflow to review the current input.';
   $('record').textContent = ''; $('structure-info').textContent = 'No current plan';
   $('compatibility-status').textContent = 'Settings changed. Check OpenMM compatibility for the current inputs.';
+  $('environment-downloads').hidden = true;
   draw();
 }
 const preparationInputs = new Set(['pdb','psf','topologies','parameters','histidine','first-patch','last-patch','hydrogens','confirm-guess','prep-mode']);
@@ -19,7 +22,7 @@ function settingsChanged(event) {
     $('prep-status').textContent = 'Inputs changed. Prepare the files again.';
   }
   invalidate(); $('propose').disabled = !prepared || preparing;
-  $('check-compatibility').disabled = !prepared || preparing || checking;
+  refreshEnvironmentButtons();
 }
 $('plan-form').addEventListener('input', settingsChanged);
 $('plan-form').addEventListener('change', settingsChanged);
@@ -49,7 +52,7 @@ $('prepare').addEventListener('click', async () => {
   const submittedRevision = revision, mode = $('prep-mode').value;
   const options = {histidine:$('histidine').value,first:$('first-patch').value,last:$('last-patch').value,hydrogens:$('hydrogens').value};
   const confirm_guess = $('confirm-guess').checked;
-  preparing = true; $('prepare').disabled = $('propose').disabled = $('check-compatibility').disabled = true;
+  preparing = true; $('prepare').disabled = $('propose').disabled = true; refreshEnvironmentButtons();
   $('prep-status').textContent = mode === 'generate' ? 'Generating files…' : 'Checking the pair…';
   try {
     const inputPdb = await readFile($('pdb').files[0], 'PDB');
@@ -86,48 +89,79 @@ $('prepare').addEventListener('click', async () => {
     $('record').textContent = JSON.stringify(result.manifest,null,2); draw();
   } catch(error) {
     if (submittedRevision === revision) { $('error').textContent = error.message; $('prep-status').textContent = 'Preparation needs attention.'; }
-  } finally { preparing = false; $('prepare').disabled = false; $('propose').disabled = !prepared; $('check-compatibility').disabled = !prepared || checking; }
+  } finally { preparing = false; $('prepare').disabled = false; $('propose').disabled = !prepared; refreshEnvironmentButtons(); }
 });
+
+function refreshEnvironmentButtons() {
+  const disabled = !prepared || preparing || checking || liveRunning || $('solvent-model').value === 'deferred';
+  $('check-compatibility').disabled = disabled;
+  $('test-readiness').disabled = disabled;
+  $('propose').disabled = !prepared || preparing || checking || liveRunning;
+}
 
 function environmentSettings() {
   if ($('solvent-model').value === 'deferred') return {solvent_model:'deferred',temperature_k:$('temperature').value};
-  return {solvent_model:$('solvent-model').value,salt_molar:$('salt-molar').value,
-    padding_nm:$('solvent-model').value === 'charmm_tip3p' ? $('padding-nm').value : 1,temperature_k:$('temperature').value};
+  return {solvent_model:$('solvent-model').value,salt_molar:['obc2','gbn2'].includes($('solvent-model').value) ? $('salt-molar').value : 0,
+    padding_nm:$('solvent-model').value === 'charmm_tip3p' ? $('padding-nm').value : 1,temperature_k:$('temperature').value,timestep_fs:$('timestep').value};
 }
 function showCompatibility(result) {
-  const labels = {deferred:'Decide later',compatible:'Compatible in this OpenMM check',needs_input:'More files needed',requires_preparation:'Additional preparation required',failed:'Compatibility check failed',unavailable:'OpenMM unavailable',not_checked:'Not checked'};
+  const labels = {deferred:'Decide later',compatible:'Compatible in this OpenMM check',needs_input:'More files needed',requires_preparation:'Additional preparation required',failed:'Compatibility check failed',unavailable:'OpenMM unavailable',incomplete:'Readiness test incomplete',not_checked:'Not checked'};
   $('compatibility-status').textContent = `${labels[result.status] || result.status}: ${result.message}` +
     (result.openmm_version ? ` OpenMM ${result.openmm_version}; ${result.particles} particles.` : '') +
     (result.required ? `\n${result.required.join('\n')}` : '') +
+    (result.box ? `\n${result.box.water_molecules} TIP3 waters; cubic periodic box ${result.box.box_vectors_nm[0][0].toFixed(3)} nm; PME; 0 added ions; no neutralization.` : '') +
+    (result.implicit_salt_note ? `\n${result.settings.salt_molar} M ionic screening. ${result.implicit_salt_note}` : '') +
+    (result.readiness ? `\nReadiness test passed: ${result.readiness.dynamics_steps} steps (${result.readiness.duration_ps} ps); finite energy, forces and coordinates. This is not production validation.` : '') +
+    (result.box ? `\nNet charge: ${result.net_charge_e.toFixed(4)} e (unchanged).` : '') +
     '\nProtonation is not validated by this check. Simulation readiness still requires review.';
+  const downloads = $('environment-downloads'); downloads.replaceChildren();
+  if (result.storage) {
+    for (const [name,url] of Object.entries(result.storage.download_urls)) {
+      const link=document.createElement('a'); link.href=url; link.download=name; link.textContent=`Download ${name}`; downloads.append(link);
+    }
+    downloads.hidden=false;
+  }
 }
 $('solvent-model').addEventListener('change', () => {
   const model = $('solvent-model').value;
-  $('salt-field').hidden = model === 'deferred';
+  if (['obc2','gbn2'].includes(previousSolvent)) implicitSalt=$('salt-molar').value;
+  const implicit = ['obc2','gbn2'].includes(model);
+  $('salt-field').hidden = !implicit;
   $('padding-field').hidden = model !== 'charmm_tip3p';
   $('padding-nm').disabled = model !== 'charmm_tip3p';
-  $('salt-molar').disabled = model === 'vacuum' || model === 'deferred';
-  if (model === 'vacuum') $('salt-molar').value = '0';
-  $('salt-help').textContent = model === 'charmm_tip3p' ? 'Target concentration for future water-box and ion preparation.' : model === 'vacuum' ? 'Salt is not used in vacuum.' : 'Implicit solvent uses salt screening; no ions are added.';
+  $('water-field').hidden = model !== 'charmm_tip3p';
+  $('water-files').disabled = model !== 'charmm_tip3p';
+  $('salt-molar').disabled = !implicit;
+  $('salt-molar').value = implicit ? implicitSalt : '0';
+  $('check-compatibility').textContent = model === 'charmm_tip3p' ? 'Build water box + check OpenMM' : 'Check OpenMM compatibility';
+  previousSolvent=model; refreshEnvironmentButtons();
 });
-$('check-compatibility').addEventListener('click', async () => {
+async function runEnvironmentCheck(readiness=false) {
   if (!prepared || preparing || checking) return;
   const submittedRevision = revision, pair = prepared, settings = environmentSettings();
-  checking = true; $('check-compatibility').disabled = true;
-  $('compatibility-status').textContent = 'Checking the selected settings and files in OpenMM…';
+  checking = true; refreshEnvironmentButtons();
+  $('environment-downloads').hidden=true;
+  $('compatibility-status').textContent = readiness ? 'Building the selected environment and running a bounded OpenMM readiness test…' : 'Building/checking the selected environment in OpenMM…';
   try {
-    const [topologies,parameters] = await Promise.all([readFiles('topologies'),readFiles('parameters')]);
+    const [topologies,parameters,water] = await Promise.all([readFiles('topologies'),readFiles('parameters'),settings.solvent_model==='charmm_tip3p' ? readFiles('water-files') : []]);
     if (revision !== submittedRevision) return;
-    const response = await fetch('/api/compatibility', {method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({pdb:pair.pdb,psf:pair.psf,topologies,parameters,settings})});
+    const response = await fetch(readiness ? '/api/runs' : '/api/compatibility', {method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({pdb:pair.pdb,psf:pair.psf,topologies,parameters,water,settings})});
     const result = await response.json();
-    if (revision !== submittedRevision) return;
     if (!response.ok) throw Error(result.error || 'Compatibility check failed.');
+    if (readiness) {
+      startRunMonitor(result.id,submittedRevision);
+      $('live-monitor').scrollIntoView({behavior:'smooth',block:'start'});
+      return;
+    }
+    if (revision !== submittedRevision) return;
     showCompatibility(result);
   } catch(error) {
     if (revision === submittedRevision) $('compatibility-status').textContent = error.message;
-  } finally { checking = false; $('check-compatibility').disabled = !prepared || preparing; }
-});
+  } finally { checking = false; refreshEnvironmentButtons(); }
+}
+$('check-compatibility').addEventListener('click',()=>runEnvironmentCheck(false));
+$('test-readiness').addEventListener('click',()=>runEnvironmentCheck(true));
 function download(name, content, mime='text/plain') {
   const url = URL.createObjectURL(new Blob([content], {type:mime}));
   const a = document.createElement('a'); a.href = url; a.download = name; a.click();
@@ -156,11 +190,11 @@ $('plan-form').addEventListener('submit', async event => {
     pdb = pair.pdb;
     const settings = {...environmentSettings(),temperature_k:$('temperature').value,duration_ps:$('duration').value,
       equilibration_ps:$('equilibration').value,timestep_fs:$('timestep').value};
-    const [topologies,parameters] = await Promise.all([readFiles('topologies'),readFiles('parameters')]);
+    const [topologies,parameters,water] = await Promise.all([readFiles('topologies'),readFiles('parameters'),settings.solvent_model==='charmm_tip3p' ? readFiles('water-files') : []]);
     if (revision !== submittedRevision) return;
     const response = await fetch('/api/plan', {method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({pdb, psf:pair.psf, preparation_options:pair.manifest.details.options || {},
-        topologies,parameters,check_compatibility:true,request:$('request').value,settings})});
+        topologies,parameters,water,check_compatibility:true,request:$('request').value,settings})});
     const result = await response.json();
     if (revision !== submittedRevision) return;
     if (!response.ok) throw Error(result.error || 'Could not create a plan.');
@@ -219,3 +253,126 @@ canvas.onpointermove = e => {if(!dragging)return; yaw+=(e.clientX-dragging[0])*.
 canvas.onpointerup = canvas.onpointercancel = () => dragging=null;
 canvas.addEventListener('wheel', e => {e.preventDefault();zoom=Math.max(.3,Math.min(4,zoom*Math.exp(-e.deltaY*.001)));draw();},{passive:false});
 new ResizeObserver(draw).observe(canvas);
+
+const svgNS = 'http://www.w3.org/2000/svg';
+function svgElement(tag, attributes={}, text) {
+  const element=document.createElementNS(svgNS,tag);
+  for (const [name,value] of Object.entries(attributes)) element.setAttribute(name,String(value));
+  if (text !== undefined) element.textContent=text;
+  return element;
+}
+function measuredNumber(value) {
+  return Number.isFinite(value) ? value.toLocaleString(undefined,{maximumFractionDigits:3}) : '—';
+}
+function drawMeasurementChart(id, samples, xField, series, xLabel, yLabel, target=null) {
+  const svg=$(id); svg.replaceChildren();
+  const left=78,right=540,top=18,bottom=215;
+  const valid=samples.filter(s=>Number.isFinite(s[xField]));
+  const values=valid.flatMap(s=>series.map(line=>s[line.key]).filter(Number.isFinite));
+  if (!values.length) {
+    svg.append(svgElement('text',{x:280,y:120,'text-anchor':'middle',fill:'#72817a','font-size':13},'Waiting for real OpenMM measurements'));
+    return;
+  }
+  let xmin=Math.min(...valid.map(s=>s[xField])), xmax=Math.max(...valid.map(s=>s[xField]));
+  if (xmin===xmax) xmax=xmin+(xField==='time_ps' ? .02 : 1);
+  let ymin=Math.min(...values,...(Number.isFinite(target) ? [target] : []));
+  let ymax=Math.max(...values,...(Number.isFinite(target) ? [target] : []));
+  const padding=Math.max((ymax-ymin)*.1,Math.abs(ymax)*.005,.01); ymin-=padding;ymax+=padding;
+  const x=value=>left+(value-xmin)/(xmax-xmin)*(right-left);
+  const y=value=>bottom-(value-ymin)/(ymax-ymin)*(bottom-top);
+  for(let i=0;i<=4;i++) {
+    const yy=top+(bottom-top)*i/4, xx=left+(right-left)*i/4;
+    svg.append(svgElement('line',{x1:left,x2:right,y1:yy,y2:yy,stroke:'#e4eae0'}));
+    const tick=ymax-(ymax-ymin)*i/4;
+    svg.append(svgElement('text',{x:left-8,y:yy+4,'text-anchor':'end',fill:'#72817a','font-size':10},Math.abs(tick)>=10000 ? tick.toExponential(1) : tick.toFixed(Math.abs(tick)<1 ? 3 : 1)));
+    svg.append(svgElement('text',{x:xx,y:bottom+17,'text-anchor':'middle',fill:'#72817a','font-size':10},measuredNumber(xmin+(xmax-xmin)*i/4)));
+  }
+  svg.append(svgElement('text',{x:(left+right)/2,y:252,'text-anchor':'middle',fill:'#263c36','font-size':11},xLabel));
+  svg.append(svgElement('text',{x:14,y:115,transform:'rotate(-90 14 115)','text-anchor':'middle',fill:'#263c36','font-size':11},yLabel));
+  if (Number.isFinite(target)) svg.append(svgElement('line',{x1:left,x2:right,y1:y(target),y2:y(target),stroke:'#8d9690','stroke-dasharray':'5 4'}));
+  for(const line of series) {
+    const points=valid.filter(s=>Number.isFinite(s[line.key]));
+    svg.append(svgElement('path',{d:points.map((s,i)=>`${i?'L':'M'}${x(s[xField])},${y(s[line.key])}`).join(' '),fill:'none',stroke:line.color,'stroke-width':2}));
+    for (const sample of points) {
+      const point=svgElement('circle',{cx:x(sample[xField]),cy:y(sample[line.key]),r:2.5,fill:line.color});
+      point.append(svgElement('title',{},`${line.label}: ${measuredNumber(sample[line.key])} ${yLabel}; ${xLabel}: ${measuredNumber(sample[xField])}`));svg.append(point);
+    }
+  }
+}
+function renderMeasurements(record) {
+  const dynamics=record.samples.filter(s=>s.stage==='dynamics');
+  const minimum=record.samples.filter(s=>s.stage==='minimization');
+  drawMeasurementChart('temperature-plot',dynamics,'time_ps',[{key:'temperature_k',color:'#326ba8',label:'Temperature'}],'Simulation time / ps','K',record.settings.temperature_k);
+  drawMeasurementChart('energy-plot',dynamics,'time_ps',[
+    {key:'potential_energy_kj_mol',color:'#206b50',label:'Potential'},
+    {key:'kinetic_energy_kj_mol',color:'#a86d1b',label:'Kinetic'},
+    {key:'total_energy_kj_mol',color:'#8c4f99',label:'Total'}],'Simulation time / ps','kJ/mol');
+  drawMeasurementChart('minimization-plot',minimum,'report_index',[{key:'potential_energy_kj_mol',color:'#206b50',label:'System potential'}],'Optimizer report #','kJ/mol');
+  const tbody=$('latest-measurements').querySelector('tbody');tbody.replaceChildren();
+  const row=document.createElement('tr'),latest=dynamics.at(-1);
+  if (latest) {
+    for (const field of ['time_ps','temperature_k','potential_energy_kj_mol','kinetic_energy_kj_mol','total_energy_kj_mol']) {
+      const cell=document.createElement('td');cell.textContent=measuredNumber(latest[field]);row.append(cell);
+    }
+  } else {const cell=document.createElement('td');cell.colSpan=5;cell.textContent='Waiting for dynamics; no temperature is assigned during minimization.';row.append(cell);}
+  tbody.append(row);
+}
+async function startRunMonitor(identifier, submittedRevision=null) {
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(identifier)) return;
+  const monitor={id:identifier,revision:submittedRevision};activeRun=monitor;
+  liveRunning=true;refreshEnvironmentButtons();
+  try {localStorage.setItem('molvis-live-run',identifier);} catch {}
+  let failures=0;
+  while (activeRun===monitor) {
+    try {
+      const response=await fetch(`/api/runs/${identifier}`);
+      if (response.status===404) {
+        liveRunning=false;refreshEnvironmentButtons();$('stop-run').disabled=true;
+        $('run-status').textContent='Saved run not found. You can prepare a new run.';
+        try {localStorage.removeItem('molvis-live-run');} catch {}
+        return;
+      }
+      const record=await response.json();
+      if (!response.ok) throw Error(record.error || 'Run not found.');
+      if (activeRun!==monitor) return;
+      failures=0;
+      liveRunning=['queued','running','cancelling'].includes(record.status);
+      $('stop-run').disabled=!liveRunning || record.status==='cancelling';
+      $('run-status').textContent=`${record.status} · ${record.progress?.stage || 'waiting'} · ${record.samples.length} measured samples`;
+      $('run-description').textContent=`Run ${identifier.slice(0,8)} · ${record.settings.solvent_label} · target ${record.settings.temperature_k} K · timestep ${record.settings.timestep_fs} fs. Measurements belong to this saved run; changing form settings will not alter it.`;
+      renderMeasurements(record);
+      const links=$('run-downloads'),key=`${identifier}-${record.status}`;
+      if (links.dataset.runKey!==key) {
+        links.dataset.runKey=key;links.replaceChildren();
+        const urls={'measurements.jsonl':`/api/runs/${identifier}/measurements.jsonl`,'measurements.csv':`/api/runs/${identifier}/measurements.csv`,...(record.result?.storage?.download_urls || {})};
+        for(const [name,url] of Object.entries(urls)) {const link=document.createElement('a');link.href=url;link.download=name;link.textContent=`Download ${name}`;links.append(link);}
+      }
+      refreshEnvironmentButtons();
+      if (!liveRunning) {
+        if(record.result) {
+          $('run-status').textContent+=` · ${record.result.message}`;
+          if(monitor.revision!==null && monitor.revision===revision) showCompatibility(record.result);
+        }
+        return;
+      }
+    } catch(error) {
+      if(activeRun!==monitor) return;
+      $('run-status').textContent=`Connection interrupted: ${error.message} Partial data remains saved. Retrying…`;
+      if (++failures>=5) {$('run-status').textContent+=' Reload to reconnect; the worker may still be running.';return;}
+    }
+    await new Promise(resolve=>setTimeout(resolve,failures ? 1000 : 300));
+  }
+}
+$('stop-run').addEventListener('click',async()=>{
+  if (!activeRun || !liveRunning) return;
+  $('stop-run').disabled=true;
+  try {
+    const response=await fetch(`/api/runs/${activeRun.id}/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    if(!response.ok) throw Error('Could not stop run.');
+    $('run-status').textContent='Stopping the OpenMM worker; partial measurements will be retained.';
+  } catch(error) {$('run-status').textContent=error.message;$('stop-run').disabled=false;}
+});
+renderMeasurements({samples:[],settings:{temperature_k:300}});
+let savedRun=new URLSearchParams(location.search).get('run');
+try {savedRun=savedRun || localStorage.getItem('molvis-live-run');} catch {}
+if (savedRun) startRunMonitor(savedRun);

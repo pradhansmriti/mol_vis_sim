@@ -20,7 +20,7 @@ def inspect_pdb(text):
             continue
         try:
             atom = dict(name=line[12:16].strip(), altloc=line[16:17].strip(),
-                        residue=line[17:20].strip(), chain=line[21:22].strip(),
+                        residue=line[17:21].strip(), chain=line[21:22].strip(),
                         residue_id=line[22:27].strip(), segment_id=line[72:76].strip(), record=record,
                         xyz=[float(line[start:start+8]) for start in (30, 38, 46)])
         except ValueError as exc:
@@ -109,13 +109,18 @@ def create_plan(payload):
         steps[1].update(name='Review prepared PSF/PDB', action='Atom pairing checked; review protonation, patches and generated coordinates.')
         steps[2]['action'] = f'{solvent["solvent_label"]}: {compatibility["message"]}'
     if solvent['solvent_model'] == 'charmm_tip3p':
-        steps.insert(3, dict(id='solvate', name='Build water box and ions', state='proposed',
-                            action=f'CHARMM-modified TIP3P; padding {solvent["padding_nm"]:g} nm; salt {solvent["salt_molar"]:g} M. Requires solvent topology/parameters and periodic box validation.'))
+        steps.insert(2, dict(id='solvate', name='Build periodic water box (no ions)', state='proposed',
+                            action=f'CHARMM-modified TIP3P; cubic padding {solvent["padding_nm"]:g} nm; PME, 1.2 nm cutoff / 1.0 nm switching. No Na+, Cl-, or neutralization.'))
     if solvent['solvent_model'] == 'deferred':
         steps.insert(2, dict(id='environment', name='Choose solvation and salt later', state='proposed',
                              action='After reviewing the prepared structure, choose solvent, salt, and any explicit water box before OpenMM validation.'))
     return dict(schema_version=1, id=str(uuid4()), created_at=datetime.now(timezone.utc).isoformat(),
                 state='proposed', execution_available=False,
+                readiness_test_available=bool(pair),
+                run_information=dict(complete_for_bounded_test=compatibility['status']=='compatible',
+                                     environment_status=compatibility['status'], ensemble='NVT',
+                                     production_runner_connected=False,
+                                     note='A compatible System plus temperature, timestep, friction, seed and duration specifies an NVT run. Bounded readiness testing is separate from scientific equilibration and production review.'),
                 compatibility=compatibility,
                 request=str(payload.get('request', ''))[:2000],
                 structure=structure,
@@ -126,6 +131,8 @@ def create_plan(payload):
                               engine='OpenMM', forcefield=['Matching CHARMM parameters required'] if pair else ['Select compatible force-field files before preparation'],
                               solvent=solvent['solvent_label'], solvent_model=solvent['solvent_model'],
                               salt_molar=solvent['salt_molar'], padding_nm=solvent['padding_nm'] if solvent['solvent_model']=='charmm_tip3p' else None,
+                              periodic=solvent['periodic'], add_ions=False, neutralize=False,
+                              nonbonded_cutoff_nm=solvent['nonbonded_cutoff_nm'], switch_distance_nm=solvent['switch_distance_nm'],
                               constraints='HBonds', nonbonded_method=solvent['nonbonded_method'],
                               integrator='LangevinMiddle', friction_per_ps=1, seed=2026,
                               protonation=protonation),

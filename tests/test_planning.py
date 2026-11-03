@@ -1,6 +1,7 @@
 import json
 import importlib.util
 import os
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 import threading
@@ -9,6 +10,7 @@ from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from molvis.planning import create_plan, inspect_pdb
 from molvis.__main__ import Handler
+from molvis import live_runs
 from test_preparation import PDB, PSF, generation_payload
 
 
@@ -56,9 +58,10 @@ class ServerTests(unittest.TestCase):
     def setUpClass(cls):
         cls.output = TemporaryDirectory()
         cls.addClassCleanup(cls.output.cleanup)
-        env = patch.dict(os.environ, {'MOLVIS_OUTPUT_DIR':cls.output.name})
+        env = patch.dict(os.environ, {'MOLVIS_OUTPUT_DIR':cls.output.name,'MOLVIS_ENVIRONMENT_DIR':cls.output.name+'/environments','MOLVIS_RUN_DIR':cls.output.name+'/live'})
         env.start()
         cls.addClassCleanup(env.stop)
+        cls.addClassCleanup(live_runs.shutdown)
         cls.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -92,6 +95,44 @@ class ServerTests(unittest.TestCase):
     def test_cross_site_request_rejected(self):
         self.assertEqual(self.request('POST', '/api/plan', '{}', {'Origin':'https://example.com'})[0], 403)
         self.assertEqual(self.request('POST', '/api/compatibility', '{}', {'Origin':'https://example.com'})[0], 403)
+        self.assertEqual(self.request('POST', '/api/readiness', '{}', {'Origin':'https://example.com'})[0], 403)
+        self.assertEqual(self.request('POST', '/api/runs', '{}', {'Origin':'https://example.com'})[0], 403)
+        self.assertEqual(self.request('POST', '/api/runs/12345678-1234-1234-1234-123456789abc/cancel', '{}', {'Origin':'https://example.com'})[0], 403)
+
+    def test_live_run_endpoints_and_measurement_exports(self):
+        def worker(payload,observer,cancel_event):
+            observer(dict(type='sample',data=dict(sequence=1,stage='dynamics',step=10,time_ps=.02,temperature_k=301)))
+            return dict(status='compatible',message='done')
+        with patch('molvis.live_runs.check_compatibility',side_effect=worker):
+            status,data=self.request('POST','/api/runs',json.dumps(dict(pdb=PDB,psf=PSF,settings=dict(solvent_model='vacuum'),parameters=[dict(name='test.prm',text='* test')])))
+            self.assertEqual(status,202)
+            identifier=json.loads(data)['id'];live_runs._jobs[identifier]['thread'].join(3)
+        status,data=self.request('GET','/api/runs/'+identifier)
+        self.assertEqual(status,200);self.assertEqual(json.loads(data)['samples'][0]['temperature_k'],301)
+        status,data=self.request('GET','/api/runs/'+identifier+'/measurements.csv')
+        self.assertEqual(status,200);self.assertIn(b'temperature_k',data);self.assertIn(b'301',data)
+        status,data=self.request('GET','/api/runs/'+identifier+'/measurements.jsonl')
+        self.assertEqual(json.loads(data)['step'],10)
+        self.assertEqual(self.request('GET','/?run='+identifier)[0],200)
+
+    def test_unknown_live_run_and_invalid_start(self):
+        self.assertEqual(self.request('GET','/api/runs/12345678-1234-1234-1234-123456789abc')[0],404)
+        self.assertEqual(self.request('POST','/api/runs','{}')[0],400)
+
+    def test_environment_download_allowlist_and_bytes(self):
+        root=Path(self.output.name)/'environments'/'12345678-1234-1234-1234-123456789abc'
+        root.mkdir(parents=True)
+        (root/'solvated.pdb').write_bytes(b'CRYST1 test\n')
+        route='/api/environments/'+root.name+'/files/'
+        self.assertEqual(self.request('GET',route+'solvated.pdb'),(200,b'CRYST1 test\n'))
+        self.assertEqual(self.request('GET',route+'private.key')[0],404)
+        self.assertEqual(self.request('GET',route+'../../README.md')[0],404)
+
+    def test_readiness_without_environment_does_not_run_dynamics(self):
+        status,data=self.request('POST','/api/readiness',json.dumps(dict(pdb=PDB,psf=PSF)))
+        self.assertEqual(status,200)
+        self.assertEqual(json.loads(data)['status'],'deferred')
+        self.assertNotIn('readiness',json.loads(data))
 
     def test_compatibility_endpoint_needs_parameters(self):
         status, data = self.request('POST','/api/compatibility',json.dumps(dict(pdb=PDB,psf=PSF,settings=dict(solvent_model='obc2'))))

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -44,7 +45,7 @@ class OpenMMValidationTests(unittest.TestCase):
     def setUp(self):
         temporary = TemporaryDirectory(); self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        env = patch.dict(os.environ, MOLVIS_OUTPUT_DIR=str(self.root/'preparations'))
+        env = patch.dict(os.environ, MOLVIS_OUTPUT_DIR=str(self.root/'preparations'), MOLVIS_ENVIRONMENT_DIR=str(self.root/'environments'))
         env.start(); self.addCleanup(env.stop)
         result = prepare(generation_payload())
         self.preparation = Path(result['storage']['directory'])
@@ -84,9 +85,35 @@ class OpenMMValidationTests(unittest.TestCase):
                 self.assertEqual(result['status'],'compatible',result)
                 self.assertEqual(result['particles'],5)
                 self.assertFalse(result['simulation_ready'])
+                self.assertTrue((Path(result['storage']['directory'])/'system.xml').is_file())
         payload['parameters'] = [dict(name='missing.prm',text='* Missing\n*\nEND\n')]
         result = check_compatibility(payload | dict(settings=dict(solvent_model='vacuum')))
         self.assertEqual(result['status'],'failed')
+
+    def test_readiness_test_runs_bounded_dynamics(self):
+        from molvis.compatibility import check_compatibility
+        result=check_compatibility(dict(pdb=(self.preparation/'prepared.pdb').read_text(),psf=(self.preparation/'prepared.psf').read_text(),
+                                       topologies=[dict(name='test.rtf',text=RTF)],parameters=[dict(name='test.prm',text=PRM)],
+                                       settings=dict(solvent_model='vacuum'),test_dynamics=True))
+        self.assertEqual(result['status'],'compatible',result)
+        self.assertEqual(result['readiness']['dynamics_steps'],100)
+        self.assertEqual(result['readiness']['duration_ps'],.2)
+        self.assertFalse(result['simulation_ready'])
+        self.assertTrue((Path(result['storage']['directory'])/'state.xml').is_file())
+        root=Path(result['storage']['directory'])
+        samples=[json.loads(line) for line in (root/'measurements.jsonl').read_text().splitlines()]
+        minimum=[s for s in samples if s['stage']=='minimization']
+        dynamics=[s for s in samples if s['stage']=='dynamics']
+        self.assertTrue(minimum)
+        self.assertTrue(all(s['temperature_k'] is None and s['time_ps'] is None for s in minimum))
+        self.assertEqual([s['step'] for s in dynamics],list(range(0,101,10)))
+        self.assertAlmostEqual(dynamics[-1]['time_ps'],.2)
+        # Five mobile atoms, one N-H constraint, three COM degrees removed.
+        for sample in dynamics:
+            self.assertTrue(math.isfinite(sample['temperature_k']))
+            self.assertAlmostEqual(sample['total_energy_kj_mol'],sample['potential_energy_kj_mol']+sample['kinetic_energy_kj_mol'])
+            self.assertAlmostEqual(sample['temperature_k'],2*sample['kinetic_energy_kj_mol']/(11*0.00831446261815324),places=5)
+        self.assertIn('measurements.csv',result['storage']['download_urls'])
 
 
 if __name__ == '__main__':

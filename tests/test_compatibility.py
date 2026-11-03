@@ -20,11 +20,23 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(result['status'], 'needs_input')
         self.assertFalse(result['simulation_ready'])
 
-    def test_explicit_solvent_requires_actual_box_preparation(self):
-        result = check_compatibility(dict(pdb=PDB, psf=PSF, settings=dict(solvent_model='charmm_tip3p',salt_molar=.15)))
-        self.assertEqual(result['status'], 'requires_preparation')
+    def test_explicit_solvent_requires_water_definitions(self):
+        result = check_compatibility(dict(pdb=PDB, psf=PSF, settings=dict(solvent_model='charmm_tip3p')))
+        self.assertEqual(result['status'], 'needs_input')
         self.assertEqual(result['settings']['nonbonded_method'], 'PME')
         self.assertTrue(result['required'])
+
+    def test_implicit_default_screening_and_explicit_no_ions(self):
+        for model in ('obc2','gbn2'):
+            self.assertEqual(solvent_settings(dict(solvent_model=model))['salt_molar'],.2)
+        explicit=solvent_settings(dict(solvent_model='charmm_tip3p'))
+        self.assertEqual(explicit['salt_molar'],0)
+        self.assertFalse(explicit['neutralize'])
+        self.assertTrue(explicit['periodic'])
+        with self.assertRaisesRegex(ValueError,'no ions'):
+            solvent_settings(dict(solvent_model='charmm_tip3p',salt_molar=.2))
+        with self.assertRaisesRegex(ValueError,'disabled'):
+            solvent_settings(dict(solvent_model='charmm_tip3p',neutralize=True))
 
     def test_invalid_solvent_settings_rejected(self):
         for settings in ({'solvent_model':'unknown'}, {'salt_molar':-1}, {'padding_nm':0}, {'salt_molar':'nan'}):
@@ -34,13 +46,13 @@ class CompatibilityTests(unittest.TestCase):
             check_compatibility(dict(pdb=PDB,psf=PSF,settings=dict(solvent_model='vacuum',salt_molar=.15)))
 
     def test_plan_retains_environment_and_manual_protonation(self):
-        plan = create_plan(dict(pdb=PDB, psf=PSF, settings=dict(solvent_model='charmm_tip3p',salt_molar=.15,padding_nm=1.2),
+        plan = create_plan(dict(pdb=PDB, psf=PSF, settings=dict(solvent_model='charmm_tip3p',padding_nm=1.2),
                                 preparation_options=dict(histidine='HSD',first='NTER',last='CTER'),
                                 check_compatibility=True))
         self.assertEqual(plan['settings']['nonbonded_method'],'PME')
-        self.assertEqual(plan['settings']['salt_molar'],.15)
+        self.assertEqual(plan['settings']['salt_molar'],0)
         self.assertIn('HSD',plan['settings']['protonation'])
         self.assertIn('no automatic',plan['settings']['protonation'])
         self.assertIn('solvate',[step['id'] for step in plan['steps']])
-        self.assertEqual(plan['compatibility']['status'],'requires_preparation')
+        self.assertEqual(plan['compatibility']['status'],'needs_input')
         self.assertFalse(plan['execution_available'])
