@@ -57,16 +57,19 @@ def run(work):
         if abs(report['net_charge_e'])>1e-4:
             report['notes'].append(f'Solute net charge remains {report["net_charge_e"]:.4g} e; review charged periodic-system electrostatics before production.')
     if config.get('test_dynamics'):
-        from .telemetry import Measurements
+        from .telemetry import Measurements, CoordinatePreview
         measurements=Measurements(work,settings['temperature_k'])
+        preview=CoordinatePreview(work,topology,settings['coordinates_interval_steps'])
         measurements.emit('minimization',report_index=0,potential_energy_kj_mol=energy)
         progress('bounded minimization')
         mm.LocalEnergyMinimizer.minimize(context,10*unit.kilojoule_per_mole/unit.nanometer,20,measurements.minimization_reporter())
         progress('100 NVT integration steps')
         context.setVelocitiesToTemperature(settings['temperature_k']*unit.kelvin,2026)
-        reporter=measurements.dynamics_reporter(10)
+        preview.capture(simulation,force=True)
+        reporter=measurements.dynamics_reporter(settings['energy_interval_steps'],settings['temperature_interval_steps'])
         reporter.report(simulation,context.getState(getEnergy=True))
         simulation.reporters.append(reporter)
+        simulation.reporters.append(preview)
         simulation.step(100)
         measurements.close()
         state=context.getState(getEnergy=True,getForces=True,getPositions=True,getVelocities=True)
@@ -85,7 +88,10 @@ def run(work):
                                      friction_per_ps=1,elapsed_seconds=time.monotonic()-started,
                                      note='Bounded execution smoke test, not equilibration or production validation.'),
                       message='OpenMM ran bounded minimization and 100 NVT steps with finite results. Production execution is not connected.')
-        report['measurements']=dict(samples=measurements.sequence,report_interval_steps=10,
+        report['measurements']=dict(samples=measurements.sequence,
+                                    coordinates_interval_steps=settings['coordinates_interval_steps'],
+                                    energy_interval_steps=settings['energy_interval_steps'],
+                                    temperature_interval_steps=settings['temperature_interval_steps'],
                                     temperature_source='OpenMM StateDataReporter, including constraint-adjusted degrees of freedom',
                                     minimization_axis='optimizer reports; iteration index may restart during constraint enforcement',
                                     dynamics_axis='simulation time in ps')

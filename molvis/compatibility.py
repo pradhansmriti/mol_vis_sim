@@ -30,6 +30,11 @@ def solvent_settings(settings):
                 nonbonded_cutoff_nm=1.2 if model == 'charmm_tip3p' else None,
                 switch_distance_nm=1.0 if model == 'charmm_tip3p' else None,
                 timestep_fs=number(settings, 'timestep_fs', 2, .1, 2))
+    for channel in ('coordinates','energy','temperature'):
+        key=channel+'_interval_steps'
+        value=number(settings,key,10,1,100000)
+        if not value.is_integer(): raise ValueError(f'{key} must be a whole number of simulation steps.')
+        result[key]=int(value)
     if model == 'charmm_tip3p' and result['salt_molar']:
         raise ValueError('Explicit water currently adds no ions. Salt must be 0 M; neutralization is disabled.')
     if settings.get('add_ions') or settings.get('neutralize'):
@@ -41,9 +46,15 @@ def solvent_settings(settings):
 
 def observe_worker(command, repository, work, observer, cancel_event):
     """Poll flushed worker data without keeping the HTTP request open."""
-    position=0; last_progress=None
+    position=0; last_progress=None; last_frame=None
     def drain():
-        nonlocal position,last_progress
+        nonlocal position,last_progress,last_frame
+        coordinates=work/'coordinates.json'
+        if coordinates.is_file():
+            try: frame=json.loads(coordinates.read_text())
+            except (ValueError,OSError): frame=None
+            if frame and frame['sequence']!=last_frame:
+                observer(dict(type='coordinates',data=frame)); last_frame=frame['sequence']
         progress=work/'progress.json'
         if progress.is_file():
             try: current=json.loads(progress.read_text())

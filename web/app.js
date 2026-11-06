@@ -1,10 +1,12 @@
 const $ = id => document.getElementById(id);
 let plan = null, pdb = '', yaw = 0, pitch = 0, zoom = 1, dragging = null, revision = 0, prepared = null, preparing = false, checking = false;
 let implicitSalt = '0.2', previousSolvent = 'deferred';
-let liveRunning = false, activeRun = null;
+let liveRunning = false, activeRun = null, coordinateStructure = null;
+
 const canvas = $('structure'), ctx = canvas.getContext('2d');
 const colors = ['#26785b','#d09843','#5188a3','#9c6d9c'];
 function invalidate() {
+  coordinateStructure = null;
   revision++;
   plan = null; $('export').disabled = true; $('review').hidden = true;
   $('status').textContent = 'Settings changed'; $('steps').replaceChildren();
@@ -94,14 +96,18 @@ $('prepare').addEventListener('click', async () => {
 
 function refreshEnvironmentButtons() {
   const disabled = !prepared || preparing || checking || liveRunning || $('solvent-model').value === 'deferred';
+  for(const channel of ['coordinates','energy','temperature']) $(channel+'-interval').disabled=liveRunning || checking;
   $('check-compatibility').disabled = disabled;
   $('test-readiness').disabled = disabled;
   $('propose').disabled = !prepared || preparing || checking || liveRunning;
 }
 
+function outputIntervals() {
+  return Object.fromEntries(['coordinates','energy','temperature'].map(channel=>[channel+'_interval_steps',Number($(channel+'-interval').value)]));
+}
 function environmentSettings() {
-  if ($('solvent-model').value === 'deferred') return {solvent_model:'deferred',temperature_k:$('temperature').value};
-  return {solvent_model:$('solvent-model').value,salt_molar:['obc2','gbn2'].includes($('solvent-model').value) ? $('salt-molar').value : 0,
+  if ($('solvent-model').value === 'deferred') return {...outputIntervals(),solvent_model:'deferred',temperature_k:$('temperature').value};
+  return {...outputIntervals(),solvent_model:$('solvent-model').value,salt_molar:['obc2','gbn2'].includes($('solvent-model').value) ? $('salt-molar').value : 0,
     padding_nm:$('solvent-model').value === 'charmm_tip3p' ? $('padding-nm').value : 1,temperature_k:$('temperature').value,timestep_fs:$('timestep').value};
 }
 function showCompatibility(result) {
@@ -227,7 +233,7 @@ function draw() {
   const rect = canvas.getBoundingClientRect(), ratio = window.devicePixelRatio || 1;
   canvas.width = rect.width * ratio; canvas.height = rect.height * ratio;
   ctx.setTransform(ratio,0,0,ratio,0,0); ctx.clearRect(0,0,rect.width,rect.height);
-  const atoms = (plan?.structure || prepared?.structure)?.atoms.filter(a => a.name === 'CA' && a.record === 'ATOM') || [];
+  const atoms = (coordinateStructure || plan?.structure || prepared?.structure)?.atoms.filter(a => a.name === 'CA' && a.record === 'ATOM') || [];
   $('empty').hidden = atoms.length > 0;
   if (!atoms.length) return;
   const center = [0,1,2].map(k => atoms.reduce((sum,a) => sum+a.xyz[k],0)/atoms.length);
@@ -238,7 +244,7 @@ function draw() {
     const xx=x*Math.cos(yaw)+z*Math.sin(yaw), zz=-x*Math.sin(yaw)+z*Math.cos(yaw);
     return {x:rect.width/2+xx*scale,y:rect.height/2+(y*Math.cos(pitch)-zz*Math.sin(pitch))*scale,chain:a.chain};
   });
-  const chains = (plan?.structure || prepared.structure).chains;
+  const chains = (coordinateStructure || plan?.structure || prepared.structure).chains;
   points.forEach((p,i) => {
     ctx.strokeStyle = ctx.fillStyle = colors[chains.indexOf(p.chain)%colors.length];
     ctx.lineWidth=2.5; ctx.lineCap='round';
@@ -300,6 +306,10 @@ function drawMeasurementChart(id, samples, xField, series, xLabel, yLabel, targe
   }
 }
 function renderMeasurements(record) {
+  if (record.coordinates && record.coordinates.sequence!==coordinateStructure?.sequence) {
+    coordinateStructure=record.coordinates; draw();
+    $('coordinate-status').textContent=`Run ${record.id?.slice(0,8) || ''} Cα snapshot · step ${record.coordinates.step} · ${measuredNumber(record.coordinates.time_ps)} ps. Latest available coordinates; water is omitted.`;
+  }
   const dynamics=record.samples.filter(s=>s.stage==='dynamics');
   const minimum=record.samples.filter(s=>s.stage==='minimization');
   drawMeasurementChart('temperature-plot',dynamics,'time_ps',[{key:'temperature_k',color:'#326ba8',label:'Temperature'}],'Simulation time / ps','K',record.settings.temperature_k);
@@ -308,18 +318,41 @@ function renderMeasurements(record) {
     {key:'kinetic_energy_kj_mol',color:'#a86d1b',label:'Kinetic'},
     {key:'total_energy_kj_mol',color:'#8c4f99',label:'Total'}],'Simulation time / ps','kJ/mol');
   drawMeasurementChart('minimization-plot',minimum,'report_index',[{key:'potential_energy_kj_mol',color:'#206b50',label:'System potential'}],'Optimizer report #','kJ/mol');
-  const tbody=$('latest-measurements').querySelector('tbody');tbody.replaceChildren();
-  const row=document.createElement('tr'),latest=dynamics.at(-1);
-  if (latest) {
-    for (const field of ['time_ps','temperature_k','potential_energy_kj_mol','kinetic_energy_kj_mol','total_energy_kj_mol']) {
-      const cell=document.createElement('td');cell.textContent=measuredNumber(latest[field]);row.append(cell);
-    }
-  } else {const cell=document.createElement('td');cell.colSpan=5;cell.textContent='Waiting for dynamics; no temperature is assigned during minimization.';row.append(cell);}
-  tbody.append(row);
+  for(const channel of ['temperature','energy']) {
+    const field=channel==='temperature' ? 'temperature_k' : 'potential_energy_kj_mol';
+    const latest=dynamics.filter(s=>Number.isFinite(s[field])).at(-1);
+    const row=$('latest-'+channel);
+    row.children[1].textContent=latest ? measuredNumber(latest.time_ps) : '—';
+    row.children[2].textContent=!latest ? 'Waiting for dynamics.' : channel==='temperature'
+      ? `${measuredNumber(latest.temperature_k)} K`
+      : `Potential ${measuredNumber(latest.potential_energy_kj_mol)} · kinetic ${measuredNumber(latest.kinetic_energy_kj_mol)} · total ${measuredNumber(latest.total_energy_kj_mol)} kJ/mol`;
+  }
 }
+function updateOutputSpacing() {
+  for(const channel of ['coordinates','energy','temperature']) {
+    const steps=Number($(channel+'-interval').value),fs=steps*Number($('timestep').value);
+    $(channel+'-spacing').textContent=Number.isInteger(steps) && steps>0 ? `${steps} steps × ${$('timestep').value} fs = ${measuredNumber(fs)} fs (${(fs/1000).toLocaleString(undefined,{maximumFractionDigits:6})} ps)` : 'Enter a positive whole number of steps.';
+  }
+}
+for(const channel of ['coordinates','energy','temperature']) {
+  const control=$(channel+'-interval');
+  try {
+    const saved=Number(localStorage.getItem('molvis-'+channel+'-interval-steps'));
+    if(Number.isInteger(saved) && saved>=1 && saved<=100000) control.value=saved;
+  } catch {}
+  control.addEventListener('input',()=>{
+    updateOutputSpacing(); settingsChanged({target:control});
+    if(control.validity.valid) {try {localStorage.setItem('molvis-'+channel+'-interval-steps',control.value);} catch {}}
+  });
+}
+$('timestep').addEventListener('input',updateOutputSpacing);
+updateOutputSpacing();
+
 async function startRunMonitor(identifier, submittedRevision=null) {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(identifier)) return;
   const monitor={id:identifier,revision:submittedRevision};activeRun=monitor;
+  coordinateStructure=null;
+  draw();
   liveRunning=true;refreshEnvironmentButtons();
   try {localStorage.setItem('molvis-live-run',identifier);} catch {}
   let failures=0;
@@ -339,7 +372,7 @@ async function startRunMonitor(identifier, submittedRevision=null) {
       liveRunning=['queued','running','cancelling'].includes(record.status);
       $('stop-run').disabled=!liveRunning || record.status==='cancelling';
       $('run-status').textContent=`${record.status} · ${record.progress?.stage || 'waiting'} · ${record.samples.length} measured samples`;
-      $('run-description').textContent=`Run ${identifier.slice(0,8)} · ${record.settings.solvent_label} · target ${record.settings.temperature_k} K · timestep ${record.settings.timestep_fs} fs. Measurements belong to this saved run; changing form settings will not alter it.`;
+      $('run-description').textContent=`Run ${identifier.slice(0,8)} · ${record.settings.solvent_label} · target ${record.settings.temperature_k} K · timestep ${record.settings.timestep_fs} fs. Measurements belong to this saved run; changing form settings will not alter it. Outputs: ${record.settings.coordinates_interval_steps ? `coordinates every ${record.settings.coordinates_interval_steps} steps` : 'no coordinate preview recorded'}; energy every ${record.settings.energy_interval_steps ?? 10} steps; temperature every ${record.settings.temperature_interval_steps ?? 10} steps.`;
       renderMeasurements(record);
       const links=$('run-downloads'),key=`${identifier}-${record.status}`;
       if (links.dataset.runKey!==key) {

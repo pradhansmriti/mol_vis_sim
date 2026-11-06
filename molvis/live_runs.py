@@ -42,6 +42,7 @@ def start_run(payload):
         def observe(event):
             with _lock:
                 if event['type']=='progress': record['progress']=event['data']
+                elif event['type']=='coordinates': record['coordinates']=event['data']
                 else:
                     sample=event['data']; job['samples'].append(sample)
                     with (directory/'measurements.jsonl').open('a') as file:

@@ -27,6 +27,7 @@ class LiveRunTests(unittest.TestCase):
         emitted=threading.Event();release=threading.Event();self.addCleanup(release.set)
         def worker(payload,observer,cancel_event):
             observer(dict(type='sample',data=dict(sequence=1,stage='minimization',potential_energy_kj_mol=-1)))
+            observer(dict(type='coordinates',data=dict(sequence=1,step=0,atoms=[])))
             emitted.set();release.wait(3)
             return dict(status='compatible',message='done')
         with patch('molvis.live_runs.check_compatibility',side_effect=worker):
@@ -34,11 +35,13 @@ class LiveRunTests(unittest.TestCase):
             current=live_runs.read_run(started['id'])
             self.assertEqual(current['status'],'running')
             self.assertEqual(len(current['samples']),1)
+            self.assertEqual(current['coordinates']['step'],0)
             with self.assertRaisesRegex(ValueError,'already active'): live_runs.start_run(self.payload)
             release.set();live_runs._jobs[started['id']]['thread'].join(3)
         finished=live_runs.read_run(started['id']);self.assertEqual(finished['status'],'completed')
         del live_runs._jobs[started['id']]
         self.assertEqual(live_runs.read_run(started['id'])['samples'],finished['samples'])
+        self.assertEqual(live_runs.read_run(started['id'])['coordinates'],finished['coordinates'])
 
     def test_cancellation_preserves_partial_samples(self):
         emitted=threading.Event()

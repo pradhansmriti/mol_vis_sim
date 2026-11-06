@@ -43,25 +43,71 @@ class Measurements:
                 return False
         return Reporter()
 
-    def dynamics_reporter(self, interval=10):
+    def dynamics_reporter(self, interval=10, temperature_interval=None):
         from openmm import app
         measurements=self
+        temperature_interval=temperature_interval or interval
         class Reporter(app.StateDataReporter):
             def __init__(self):
                 self.stream=io.StringIO()
                 super().__init__(self.stream,interval,step=True,time=True,potentialEnergy=True,
                                  kineticEnergy=True,totalEnergy=True,temperature=True)
+            def describeNextReport(self, simulation):
+                description=super().describeNextReport(simulation)
+                description['steps']=min(interval-simulation.currentStep%interval,
+                                         temperature_interval-simulation.currentStep%temperature_interval)
+                return description
             def report(self, simulation, state):
                 super().report(simulation,state)
                 rows=list(csv.DictReader(self.stream.getvalue().lstrip('#').splitlines()))
                 row=rows[-1]
-                measurements.emit('dynamics',step=int(row['Step']),time_ps=float(row['Time (ps)']),
-                                  potential_energy_kj_mol=float(row['Potential Energy (kJ/mole)']),
+                step=int(row['Step'])
+                energy_due=step%interval==0; temperature_due=step%temperature_interval==0
+                values=dict(step=step,time_ps=float(row['Time (ps)']))
+                if energy_due:
+                    values.update(potential_energy_kj_mol=float(row['Potential Energy (kJ/mole)']),
                                   kinetic_energy_kj_mol=float(row['Kinetic Energy (kJ/mole)']),
-                                  total_energy_kj_mol=float(row['Total Energy (kJ/mole)']),
-                                  temperature_k=float(row['Temperature (K)']))
-                (measurements.work/'dynamics.csv').write_text(self.stream.getvalue())
+                                  total_energy_kj_mol=float(row['Total Energy (kJ/mole)']))
+                if temperature_due: values['temperature_k']=float(row['Temperature (K)'])
+                record=measurements.emit('dynamics',**values)
+                output=measurements.work/'dynamics.csv'
+                with output.open('a',newline='') as file:
+                    writer=csv.DictWriter(file,fieldnames=FIELDS)
+                    if file.tell()==0: writer.writeheader()
+                    writer.writerow(record)
         return Reporter()
 
     def close(self):
         self.json_file.close(); self.csv_file.close()
+
+
+class CoordinatePreview:
+    """Latest C-alpha snapshot only; never a replacement for a trajectory."""
+    def __init__(self, work, topology, interval_steps=10):
+        self.work=work; self.interval_steps=interval_steps; self.last_step=None; self.sequence=0
+        self.atoms=[(a.index,a.residue.chain.id) for a in topology.atoms()
+                    if a.name=='CA' and a.element is not None and a.element.symbol=='C']
+
+    def capture(self, simulation, state=None, force=False):
+        if simulation.currentStep==self.last_step: return
+        if not force and simulation.currentStep%self.interval_steps: return
+        from openmm import unit
+        if state is None: state=simulation.context.getState(getPositions=True)
+        xyz=state.getPositions().value_in_unit(unit.angstrom)
+        atoms=[dict(name='CA',record='ATOM',chain=chain,xyz=list(xyz[index])) for index,chain in self.atoms]
+        if any(not math.isfinite(v) for atom in atoms for v in atom['xyz']):
+            raise ValueError('Nonfinite coordinate preview; run stopped.')
+        self.sequence+=1
+        frame=dict(sequence=self.sequence,step=simulation.currentStep,
+                   time_ps=state.getTime().value_in_unit(unit.picosecond),
+                   atoms=atoms,chains=list(dict.fromkeys(chain for _,chain in self.atoms)))
+        temporary=self.work/'coordinates.tmp'
+        temporary.write_text(json.dumps(frame,allow_nan=False)); temporary.replace(self.work/'coordinates.json')
+        self.last_step=simulation.currentStep
+
+    def describeNextReport(self, simulation):
+        return dict(steps=self.interval_steps-simulation.currentStep%self.interval_steps,
+                    periodic=False,include=['positions'])
+
+    def report(self, simulation, state):
+        self.capture(simulation,state)

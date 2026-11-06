@@ -6,7 +6,7 @@ The agreed product design, specification, and interactive preview are in [output
 
 ![Molecular workspace with protein preparation, workflow planning, and live OpenMM temperature, energy, and minimization plots](docs/images/workspace-preview.jpg)
 
-Current local interface with measured villin readiness-run traces · updated November 2, 2026. This preview is refreshed with interface changes.
+Current local interface with measured villin readiness-run traces · updated November 5, 2026. This preview is refreshed with interface changes.
 
 ## Run locally
 
@@ -105,7 +105,11 @@ node --check web/app.js
 
 ### Live measurements
 
-After preparation and solvent selection, **Run + plot readiness (100 steps)** starts an OpenMM worker in the background. The **Live energy and temperature** panel updates while it runs: minimization potential energy versus optimizer report number, then measured temperature and potential/kinetic/total energy versus simulation time. Dynamics are sampled every 10 steps (0.02 ps at 2 fs); the target temperature is a dashed reference line. Temperature is not reported during minimization. Hover over points or use the latest-values table to inspect readings.
+After preparation and solvent selection, **Run + plot readiness (100 steps)** starts an OpenMM worker in the background. The **Live energy and temperature** panel updates while it runs: minimization potential energy versus optimizer report number, then measured temperature and potential/kinetic/total energy versus simulation time. Dynamics are sampled at the selected step intervals (default 10 steps, or 0.02 ps at 2 fs); the target temperature is a dashed reference line. Temperature is not reported during minimization. Hover over points or use the latest-values table to inspect readings.
+
+**Output intervals** are independent positive whole numbers of simulation steps for coordinates, energy and temperature (default 10 steps each). For a 2 fs integration timestep, every 10 steps means every 20 fs (0.02 ps). Choose intervals before starting; each run records and freezes them. They control actual OpenMM dynamics reports and saved energy/temperature samples, independent of computer speed. The interface shows the corresponding simulated time for each choice. Step 0 is included; minimization remains indexed by optimizer reports because it does not advance simulation time. Unsampled fields are blank in CSV and null in JSONL; plots and latest-value rows use each channel's own timestamps.
+
+New readiness runs capture actual Cα coordinates at step 0 after minimization and every selected coordinate interval. The browser polls for progress and displays the latest available snapshot, so fast runs can produce multiple outputs between screen updates. Only the latest snapshot is retained in the live run record, including after cancellation or restart; this is a lightweight preview, not a saved trajectory. The final PDB remains available separately, even if the final step is not on an output boundary. Earlier saved runs have no coordinate snapshots. Intervals longer than the current 100-step test yield only the initial output. Performance comparisons on real proteins remain part of stress testing.
 
 Runs use a frozen copy of the submitted settings. **Stop run** terminates the worker and retains partial measurements. Refreshing reconnects to the last run; `/?run=<run-id>#live-monitor` opens a saved trace. Interrupted server sessions are labeled and are not automatically resumed. Live CSV/JSONL downloads remain available, including partial traces, and completed environment ZIPs include measurements plus OpenMM's dynamics CSV. Records persist under `runs/live/<id>/`; successful environment artifacts remain in `runs/environments/<id>/`. Only one live readiness run is allowed at a time.
 
@@ -130,6 +134,13 @@ The diagnostic checks PSF/PDB correspondence, creates a fully parameterized Syst
 Each new output directory contains `report.json` (settings, input hashes, engine version, energies, forces and heavy-atom displacement), `minimized.pdb`, its matching `prepared.psf`, `system.xml`, and `state.xml`. Inputs are never overwritten, and an existing output folder is rejected. Parameter/minimization errors exit nonzero and save a failure report after input loading. These outputs are separate from preparation downloads. See [the measured results and remaining steps](outputs/openmm-validation.md). To include the optional OpenMM integration tests, run the regression suite with `.venv/bin/python` and a configured `MOLVIS_PSFGEN`.
 
 ## Next implementation
+
+Next priorities (November 5, 2026):
+
+1. Stress-test the preparation and live readiness workflow with ubiquitin and villin, including failed inputs, stop/reconnect behavior, and retained downloads.
+2. Add a separate, longer minimization and NVT equilibration stage with explicit settings and recorded energy, temperature and structural checks. The current 0.2 ps readiness run does not demonstrate stabilization.
+3. Connect a reviewed production runner with trajectory output, checkpoints, restart controls and reproducibility metadata after those checks pass. Review the charged periodic-system choice before production; ion addition remains deferred.
+4. Record a short walkthrough for the website soon, once the workflow is stable: upload or generate PSF/PDB → inspect the structure → select solvent and a periodic water box → run and follow the measurements → download results. Clearly distinguish recorded playback from a live run, and readiness testing from equilibration or production. Recording is planned, not requested yet.
 
 The native-generation test runs when psfgen is installed, and is skipped in the dependency-free environment. It uses a synthetic topology for testing only, generates an added atom, checks the pair, reuploads it, and creates a plan.
 

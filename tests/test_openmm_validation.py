@@ -92,10 +92,16 @@ class OpenMMValidationTests(unittest.TestCase):
 
     def test_readiness_test_runs_bounded_dynamics(self):
         from molvis.compatibility import check_compatibility
+        events=[]
         result=check_compatibility(dict(pdb=(self.preparation/'prepared.pdb').read_text(),psf=(self.preparation/'prepared.psf').read_text(),
                                        topologies=[dict(name='test.rtf',text=RTF)],parameters=[dict(name='test.prm',text=PRM)],
-                                       settings=dict(solvent_model='vacuum'),test_dynamics=True))
+                                       settings=dict(solvent_model='vacuum'),test_dynamics=True),observer=events.append)
         self.assertEqual(result['status'],'compatible',result)
+        frames=[event['data'] for event in events if event['type']=='coordinates']
+        self.assertTrue(frames)
+        self.assertEqual(frames[-1]['step'],100)
+        self.assertAlmostEqual(frames[-1]['time_ps'],.2)
+        self.assertEqual([atom['name'] for atom in frames[-1]['atoms']],['CA'])
         self.assertEqual(result['readiness']['dynamics_steps'],100)
         self.assertEqual(result['readiness']['duration_ps'],.2)
         self.assertFalse(result['simulation_ready'])

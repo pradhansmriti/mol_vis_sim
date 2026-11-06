@@ -6,6 +6,13 @@ from test_preparation import PDB, PSF
 
 
 class CompatibilityTests(unittest.TestCase):
+    def test_output_intervals_are_positive_whole_simulation_steps(self):
+        settings=solvent_settings(dict(coordinates_interval_steps=7,energy_interval_steps=6,temperature_interval_steps=10))
+        self.assertEqual([settings[c+'_interval_steps'] for c in ('coordinates','energy','temperature')],[7,6,10])
+        for value in (0,-1,1.5,True,'nan',100001):
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                solvent_settings(dict(energy_interval_steps=value))
+
     def test_deferred_environment_does_not_assign_solvent_or_salt(self):
         plan = create_plan(dict(pdb=PDB,psf=PSF,check_compatibility=True))
         self.assertEqual(plan['compatibility']['status'],'deferred')
