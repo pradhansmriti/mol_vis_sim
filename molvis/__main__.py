@@ -12,7 +12,7 @@ from .planning import create_plan
 from .preparation import prepare, output_root
 from .compatibility import check_compatibility
 from .environment_storage import DOWNLOADS, environment_root
-from .live_runs import start_run, read_run, cancel_run, shutdown
+from .live_runs import start_run, resume_run, read_run, cancel_run, shutdown
 
 WEB = Path(__file__).resolve().parent.parent / 'web'
 
@@ -89,7 +89,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         cancel=re.fullmatch(r'/api/runs/([0-9a-f-]{36})/cancel',self.path)
-        if self.path not in ('/api/plan', '/api/prepare', '/api/compatibility','/api/readiness','/api/runs') and not cancel:
+        resume=re.fullmatch(r'/api/runs/([0-9a-f-]{36})/resume',self.path)
+        if self.path not in ('/api/plan', '/api/prepare', '/api/compatibility','/api/readiness','/api/runs') and not (cancel or resume):
             self.reply(404, b'Not found', 'text/plain')
             return
         # Reject cross-site browser requests to this local service.
@@ -107,8 +108,13 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/readiness': payload['test_dynamics']=True
             else: payload.pop('test_dynamics',None)
             actions = {'/api/prepare':prepare, '/api/plan':create_plan, '/api/compatibility':check_compatibility,'/api/readiness':check_compatibility,'/api/runs':start_run}
-            result = cancel_run(cancel[1]) if cancel else actions[self.path](payload)
-            self.reply(202 if self.path=='/api/runs' else 200, json.dumps(result, allow_nan=False).encode(), 'application/json')
+            if resume:
+                result = resume_run(resume[1], payload)
+            elif cancel:
+                result = cancel_run(cancel[1])
+            else:
+                result = actions[self.path](payload)
+            self.reply(202 if resume or self.path=='/api/runs' else 200, json.dumps(result, allow_nan=False).encode(), 'application/json')
         except (ValueError, TypeError, UnicodeError) as exc:
             self.reply(400, json.dumps({'error': str(exc)}).encode(), 'application/json')
 

@@ -125,9 +125,6 @@ def check_compatibility(payload, observer=None, cancel_event=None, work_director
         return result
     if pair['atom_count'] > 20000:
         raise ValueError('Interactive compatibility checks are limited to 20000 atoms. Validate larger systems offline.')
-    repository = Path(__file__).resolve().parent.parent
-    local_python = repository/'.venv'/'bin'/'python'
-    python = os.environ.get('MOLVIS_OPENMM_PYTHON', str(local_python) if local_python.is_file() else sys.executable)
     with TemporaryDirectory(prefix='molvis-compatibility-') as directory:
         work = Path(work_directory) if work_directory is not None else Path(directory)
         work.mkdir(parents=True,exist_ok=True)
@@ -140,34 +137,41 @@ def check_compatibility(payload, observer=None, cancel_event=None, work_director
                 (work/name).write_text(item['text'])
                 config[kind].append(name)
         (work/'config.json').write_text(json.dumps(config))
-        timeout=240 if not config['test_dynamics'] or settings['dynamics_steps']<=100 else 240+2*settings['dynamics_steps']
-        try:
-            command=[python,'-m','molvis.compatibility_worker',str(work)]
-            if observer:
-                process,cancelled=observe_worker(command,repository,work,observer,cancel_event,timeout)
-                if cancelled:
-                    result.update(status='cancelled',message='OpenMM run cancelled. Partial measurements are retained in the live run record.')
-                    return result
-            else:
-                process = subprocess.run(command, cwd=repository,
-                                     capture_output=True, text=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            progress=json.loads((work/'progress.json').read_text()) if (work/'progress.json').is_file() else {}
-            result.update(status='incomplete', message=f'OpenMM environment/readiness check exceeded {timeout} seconds; no successful readiness result was accepted.', progress=progress)
-            return result
-        except OSError:
-            result.update(status='unavailable', message='OpenMM interpreter could not be started. Check MOLVIS_OPENMM_PYTHON.')
-            return result
-        if not (work/'result.json').is_file():
-            result.update(status='failed', message='OpenMM worker did not return a check result.', diagnostic=(process.stderr+process.stdout)[-4000:])
-            return result
-        worker_result=json.loads((work/'result.json').read_text())
-        worker_notes=worker_result.pop('notes',[])
-        result.update(worker_result)
-        result['notes'].extend(worker_notes)
-        if process.returncode and result['status'] == 'compatible':
-            result.update(status='failed', message='OpenMM worker exited unsuccessfully.')
-        if result['status'] == 'compatible':
-            from .environment_storage import save_environment
-            result['storage'] = save_environment(work, result)
+        return execute_worker(work, settings, result, observer, cancel_event, config['test_dynamics'])
+
+
+def execute_worker(work, settings, result, observer, cancel_event, test_dynamics=True):
+    repository = Path(__file__).resolve().parent.parent
+    local_python = repository/'.venv'/'bin'/'python'
+    python = os.environ.get('MOLVIS_OPENMM_PYTHON', str(local_python) if local_python.is_file() else sys.executable)
+    timeout=240 if not test_dynamics or settings['dynamics_steps']<=100 else 240+2*settings['dynamics_steps']
+    try:
+        command=[python,'-m','molvis.compatibility_worker',str(work)]
+        if observer:
+            process,cancelled=observe_worker(command,repository,work,observer,cancel_event,timeout)
+            if cancelled:
+                result.update(status='cancelled',message='OpenMM run cancelled. Partial measurements are retained in the live run record.')
+                return result
+        else:
+            process = subprocess.run(command, cwd=repository,
+                                 capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        progress=json.loads((work/'progress.json').read_text()) if (work/'progress.json').is_file() else {}
+        result.update(status='incomplete', message=f'OpenMM environment/readiness check exceeded {timeout} seconds; no successful readiness result was accepted.', progress=progress)
+        return result
+    except OSError:
+        result.update(status='unavailable', message='OpenMM interpreter could not be started. Check MOLVIS_OPENMM_PYTHON.')
+        return result
+    if not (work/'result.json').is_file():
+        result.update(status='failed', message='OpenMM worker did not return a check result.', diagnostic=(process.stderr+process.stdout)[-4000:])
+        return result
+    worker_result=json.loads((work/'result.json').read_text())
+    worker_notes=worker_result.pop('notes',[])
+    result.update(worker_result)
+    result['notes'].extend(worker_notes)
+    if process.returncode and result['status'] == 'compatible':
+        result.update(status='failed', message='OpenMM worker exited unsuccessfully.')
+    if result['status'] == 'compatible':
+        from .environment_storage import save_environment
+        result['storage'] = save_environment(work, result)
     return result

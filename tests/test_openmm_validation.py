@@ -110,6 +110,40 @@ class OpenMMValidationTests(unittest.TestCase):
         self.assertAlmostEqual(simulation.context.getState().getTime().value_in_unit(unit.picosecond),2)
         self.assertIn('checkpoint.chk',result['storage']['download_urls'])
 
+    def test_resume_preserves_history_through_checkpoint(self):
+        from molvis import live_runs
+
+        payload = dict(
+            pdb=(self.preparation/'prepared.pdb').read_text(),
+            psf=(self.preparation/'prepared.psf').read_text(),
+            topologies=[dict(name='test.rtf',text=RTF)],
+            parameters=[dict(name='test.prm',text=PRM)],
+            settings=dict(solvent_model='vacuum',dynamics_steps=10),
+        )
+        with patch.dict(os.environ, MOLVIS_RUN_DIR=str(self.root/'live')), patch.dict(live_runs._jobs, clear=True):
+            try:
+                parent_id = live_runs.start_run(payload)['id']
+                live_runs._jobs[parent_id]['thread'].join(20)
+                parent = live_runs.read_run(parent_id)
+                self.assertEqual(parent['status'], 'completed', parent['result'])
+                # An interrupted worker can have samples newer than its last checkpoint.
+                tail = dict(parent['samples'][-1], step=20, time_ps=.04,
+                            sequence=parent['samples'][-1]['sequence']+1)
+                live_runs._jobs[parent_id]['samples'].append(tail)
+                child_id = live_runs.resume_run(parent_id, {'dynamics_steps':10})['id']
+                live_runs._jobs[child_id]['thread'].join(20)
+                child = live_runs.read_run(child_id)
+                self.assertEqual(child['status'], 'completed', child['result'])
+                self.assertEqual(child['samples'][:-1], parent['samples'])
+                self.assertEqual(child['samples'][-1]['step'], 20)
+                self.assertAlmostEqual(child['samples'][-1]['time_ps'], .04)
+                self.assertEqual(child['coordinates']['step'], 20)
+                self.assertEqual(live_runs.read_run(parent_id)['samples'][-1], tail)
+                output = Path(child['result']['storage']['directory'])/'measurements.jsonl'
+                self.assertEqual([json.loads(line) for line in output.read_text().splitlines()], child['samples'])
+            finally:
+                live_runs.shutdown()
+
     def test_readiness_test_runs_bounded_dynamics(self):
         from molvis.compatibility import check_compatibility
         events=[]

@@ -6,7 +6,7 @@ The agreed product design, specification, and interactive preview are in [output
 
 ![Molecular workspace with protein preparation, workflow planning, and live OpenMM temperature, energy, and minimization plots](docs/images/workspace-preview.jpg)
 
-Current local interface with measured ubiquitin periodic-water traces from the 2 ps NVT test · updated November 7, 2026. This preview is refreshed with interface changes.
+Starting ubiquitin structure in its periodic water box, with simulation output from a checkpoint continuation · updated November 7, 2026. This preview is refreshed with interface changes.
 
 ## Run locally
 
@@ -106,15 +106,19 @@ node tests/test_display_refresh.cjs
 
 ### Live measurements
 
-After preparation and solvent selection, **Run + plot NVT** starts an OpenMM worker in the background. The **Live energy and temperature** panel updates while it runs: minimization potential energy versus optimizer report number, then measured temperature and potential/kinetic/total energy versus simulation time. Dynamics are sampled at the selected step intervals (default 10 steps, or 0.02 ps at 2 fs); the target temperature is a dashed reference line. Temperature is not reported during minimization. Hover over points or use the latest-values table to inspect readings.
+**2. Structures** previews the starting coordinates as a Cα trace or as all atoms except hydrogen. Build the periodic water box to see the prepared solute, water oxygens, and box outline.
+
+After preparation and solvent selection, **Run + plot NVT** starts an OpenMM worker in the background. The **4. Simulation output** panel updates while it runs: minimization potential energy versus optimizer report number, then measured temperature and potential/kinetic/total energy versus simulation time. Dynamics are sampled at the selected step intervals (default 10 steps, or 0.02 ps at 2 fs); the target temperature is a dashed reference line. Temperature is not reported during minimization. Hover over points or use the latest-values table to inspect readings.
 
 **Output intervals** are independent positive whole numbers of simulation steps for coordinates, energy and temperature (default 10 steps each). For a 2 fs integration timestep, every 10 steps means every 20 fs (0.02 ps). Choose intervals before starting; each run records and freezes them. They control actual OpenMM dynamics reports and saved energy/temperature samples, independent of computer speed. The interface shows the corresponding simulated time for each choice. Step 0 is included; minimization remains indexed by optimizer reports because it does not advance simulation time. Unsampled fields are blank in CSV and null in JSONL; plots and latest-value rows use each channel's own timestamps.
 
-New readiness runs capture actual Cα coordinates at step 0 after minimization and every selected coordinate interval. The browser polls for progress and displays the latest available snapshot, so fast runs can produce multiple outputs between screen updates. Only the latest snapshot is retained in the live run record, including after cancellation or restart; this is a lightweight preview, not a saved trajectory. The final PDB remains available separately, even if the final step is not on an output boundary. Earlier saved runs have no coordinate snapshots. Intervals longer than the selected test length yield only the initial output. See [the two-protein stress-test report](outputs/stress-testing.md) for output checks, reconnect behavior, timing results and their limits.
+New readiness runs capture actual Cα coordinates at step 0 after minimization and every selected coordinate interval. Only the latest snapshot is retained in the live run record, including after cancellation or restart; this is a lightweight preview, not a saved trajectory. The final PDB remains available separately, even if the final step is not on an output boundary. Earlier saved runs have no coordinate snapshots. Intervals longer than the selected test length yield only the initial output. See [the two-protein stress-test report](outputs/stress-testing.md) for output checks, reconnect behavior, timing results and their limits.
 
 **NVT test length** accepts 1–1,000 integration steps (default 100). At 2 fs, 1,000 steps is 2 ps; this is separate from the proposed production duration. Tests still use the existing 20-iteration-per-pass minimization setting and do not assert convergence or equilibration. Progress reports completed steps, and portable state XML plus a binary checkpoint are saved at step 0 and every 100 steps, including the final partial block.
 
 Live worker files persist under `runs/live/<id>/worker/`, including after cancellation or failure. Available checkpoint, state, System and integrator downloads appear while the job runs; successful environment ZIPs also contain them. Checkpoint loading requires a matching System, OpenMM version, platform and hardware; the app does not automatically resume runs. State XML is more portable but does not retain the random-number-generator state. Interactive compatibility and ≤100-step tests retain a 240-second timeout; longer bounded tests allow `240 + 2 × steps` seconds (2,240 seconds for 1,000 steps).
+
+**Resume from checkpoint** continues a saved local run for 1–1,000 additional steps using its original System, integrator and output intervals. The continuation has its own run ID and copies measurements through the checkpoint step before appending new samples. The source run remains available, including any measurements recorded after its last checkpoint. In the verified ubiquitin continuation, step 1,000 at 2 ps advanced to step 1,010 at 2.02 ps with one new sample.
 
 Runs use a frozen copy of the submitted settings. **Stop run** terminates the worker and retains partial measurements. Refreshing reconnects to the last run; `/?run=<run-id>#live-monitor` opens a saved trace. Interrupted server sessions are labeled and are not automatically resumed. Live CSV/JSONL downloads remain available, including partial traces, and completed environment ZIPs include measurements plus OpenMM's dynamics CSV. Records persist under `runs/live/<id>/`; successful environment artifacts remain in `runs/environments/<id>/`. Only one live readiness run is allowed at a time.
 
@@ -143,7 +147,7 @@ Each new output directory contains `report.json` (settings, input hashes, engine
 Next priorities (November 7, 2026):
 
 1. Initial two-protein stress checks passed on November 6, including generation/upload, independent output intervals, cancellation, reconnect and downloads; see [results and measured coordinate-output cost](outputs/stress-testing.md). Broader system sizes and longer runs remain untested.
-2. Add checkpoint resume and verify that a continued run preserves simulation time and appends measurements. Use the saved 2 ps ubiquitin state for a longer NVT relaxation check. Review temperature, potential energy and protein structure across time windows before starting production.
+2. Checkpoint resume passed a short continuation of the saved ubiquitin run. Use a longer relaxation check when evaluating that system for production. Review temperature, potential energy and protein structure across time windows before starting data collection.
 3. Connect a reviewed production runner with trajectory output, checkpoints, restart controls and reproducibility metadata after those checks pass. Review the charged periodic-system choice before production; ion addition remains deferred.
 4. Record a short walkthrough for the website soon, once the workflow is stable: upload or generate PSF/PDB → inspect the structure → select solvent and a periodic water box → run and follow the measurements → download results. Clearly distinguish recorded playback from a live run, and readiness testing from equilibration or production. Recording is planned, not requested yet.
 

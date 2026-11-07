@@ -1,12 +1,13 @@
 const $ = id => document.getElementById(id);
 let plan = null, pdb = '', yaw = 0, pitch = 0, zoom = 1, dragging = null, revision = 0, prepared = null, preparing = false, checking = false;
 let implicitSalt = '0.2', previousSolvent = 'deferred';
-let liveRunning = false, activeRun = null, coordinateStructure = null;
+let liveRunning = false, activeRun = null;
 
-const canvas = $('structure'), ctx = canvas.getContext('2d');
+const canvas = $('structure');
+let inputPreview = null, savedPreview = null, solvatedPreview = null;
 const colors = ['#26785b','#d09843','#5188a3','#9c6d9c'];
 function invalidate() {
-  coordinateStructure = null;
+  solvatedPreview = null;
   revision++;
   plan = null; $('export').disabled = true; $('review').hidden = true;
   $('status').textContent = 'Settings changed'; $('steps').replaceChildren();
@@ -18,7 +19,9 @@ function invalidate() {
 }
 const preparationInputs = new Set(['pdb','psf','topologies','parameters','histidine','first-patch','last-patch','hydrogens','confirm-guess','prep-mode']);
 function settingsChanged(event) {
+  if (event.target.id === 'structure-view') return;
   if (preparationInputs.has(event.target.id)) {
+    savedPreview = null;
     prepared = null; $('prep-downloads').hidden = true;
     $('prep-location').hidden = true;
     $('prep-status').textContent = 'Inputs changed. Prepare the files again.';
@@ -67,7 +70,7 @@ $('prepare').addEventListener('click', async () => {
     const result = await response.json();
     if (submittedRevision !== revision) return;
     if (!response.ok) throw Error(result.error || 'Preparation failed.');
-    prepared = result; pdb = result.pdb; yaw = pitch = 0; zoom = 1;
+    prepared = result; prepared.preview = parseStructure(result.pdb); pdb = result.pdb; yaw = pitch = 0; zoom = 1;
     $('prep-downloads').hidden = false;
     $('prep-location').textContent = `Saved on the server: ${result.storage.directory} — prepared.pdb, prepared.psf, manifest.json and preparation.zip. Files remain after this page closes. Browser downloads are separate copies saved to your browser’s download location.`;
     $('prep-location').hidden = false;
@@ -112,6 +115,7 @@ function environmentSettings() {
     padding_nm:$('solvent-model').value === 'charmm_tip3p' ? $('padding-nm').value : 1,temperature_k:$('temperature').value,timestep_fs:$('timestep').value};
 }
 function showCompatibility(result) {
+  const currentRevision = revision;
   const labels = {deferred:'Decide later',compatible:'Compatible in this OpenMM check',needs_input:'More files needed',requires_preparation:'Additional preparation required',failed:'Compatibility check failed',unavailable:'OpenMM unavailable',incomplete:'Readiness test incomplete',not_checked:'Not checked'};
   $('compatibility-status').textContent = `${labels[result.status] || result.status}: ${result.message}` +
     (result.openmm_version ? ` OpenMM ${result.openmm_version}; ${result.particles} particles.` : '') +
@@ -127,6 +131,7 @@ function showCompatibility(result) {
       const link=document.createElement('a'); link.href=url; link.download=name; link.textContent=`Download ${name}`; downloads.append(link);
     }
     downloads.hidden=false;
+    loadStructurePreviews(result.storage.download_urls, false, () => currentRevision === revision);
   }
 }
 $('solvent-model').addEventListener('change', () => {
@@ -184,9 +189,20 @@ $('download-psf').onclick = () => downloadSaved('prepared.psf');
 $('download-manifest').onclick = () => downloadSaved('manifest.json');
 $('download-bundle').onclick = () => downloadSaved('preparation.zip');
 $('pdb').addEventListener('change', async () => {
-  invalidate(); pdb = ''; const file = $('pdb').files[0];
+  inputPreview = null; savedPreview = null; invalidate(); pdb = '';
+  const file = $('pdb').files[0];
   $('filename').textContent = file ? file.name : 'Local PDB · max 5 MB';
+  if (!file) return;
+  try {
+    const source = await readFile(file, 'PDB');
+    if ($('pdb').files[0] !== file) return;
+    inputPreview = parseStructure(source);
+    draw();
+  } catch (error) {
+    if ($('pdb').files[0] === file) $('structure-preview-help').textContent = error.message;
+  }
 });
+
 $('plan-form').addEventListener('submit', async event => {
   event.preventDefault(); $('error').textContent = ''; invalidate();
   const submittedRevision = revision;
@@ -230,31 +246,124 @@ $('export').addEventListener('click', () => {
   const a = document.createElement('a'); a.href = url; a.download = `molvis-plan-${plan.id}.json`; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
-function draw() {
-  const rect = canvas.getBoundingClientRect(), ratio = window.devicePixelRatio || 1;
-  canvas.width = rect.width * ratio; canvas.height = rect.height * ratio;
-  ctx.setTransform(ratio,0,0,ratio,0,0); ctx.clearRect(0,0,rect.width,rect.height);
-  const atoms = (coordinateStructure || plan?.structure || prepared?.structure)?.atoms.filter(a => a.name === 'CA' && a.record === 'ATOM') || [];
-  $('empty').hidden = atoms.length > 0;
-  if (!atoms.length) return;
-  const center = [0,1,2].map(k => atoms.reduce((sum,a) => sum+a.xyz[k],0)/atoms.length);
-  const radius = Math.max(1,...atoms.map(a => Math.hypot(...a.xyz.map((v,k) => v-center[k]))));
-  const scale = Math.min(rect.width,rect.height)*.36/radius*zoom;
-  const points = atoms.map(a => {
-    const [x,y,z] = a.xyz.map((v,k)=>v-center[k]);
-    const xx=x*Math.cos(yaw)+z*Math.sin(yaw), zz=-x*Math.sin(yaw)+z*Math.cos(yaw);
-    return {x:rect.width/2+xx*scale,y:rect.height/2+(y*Math.cos(pitch)-zz*Math.sin(pitch))*scale,chain:a.chain};
-  });
-  const chains = (coordinateStructure || plan?.structure || prepared.structure).chains;
-  points.forEach((p,i) => {
-    ctx.strokeStyle = ctx.fillStyle = colors[chains.indexOf(p.chain)%colors.length];
-    ctx.lineWidth=2.5; ctx.lineCap='round';
-    if(i && points[i-1].chain===p.chain && Math.hypot(...atoms[i].xyz.map((v,k)=>v-atoms[i-1].xyz[k]))<4.5){
-      ctx.beginPath(); ctx.moveTo(points[i-1].x,points[i-1].y); ctx.lineTo(p.x,p.y); ctx.stroke();
+function parseStructure(text) {
+  const atoms = [];
+  let box = null;
+  for (const line of text.split(/\r?\n/)) {
+    const record = line.slice(0, 6).trim();
+    if (record === 'ENDMDL') break;
+    if (record === 'CRYST1') {
+      const lengths = [6, 15, 24].map(start => Number(line.slice(start, start + 9)));
+      const angles = [33, 40, 47].map(start => Number(line.slice(start, start + 7)));
+      if (lengths.every(length => length > 0) && angles.every(angle => angle === 90)) box = lengths;
     }
-    ctx.beginPath();ctx.arc(p.x,p.y,2.4,0,Math.PI*2);ctx.fill();
-  });
+    if (!['ATOM', 'HETATM'].includes(record) || line.length < 54) continue;
+    const name = line.slice(12, 16).trim();
+    const element = line.slice(76, 78).trim().toUpperCase() || name.replace(/^\d+/, '')[0];
+    const xyz = [30, 38, 46].map(start => Number(line.slice(start, start + 8)));
+    if (!xyz.every(Number.isFinite)) continue;
+    atoms.push({name, record, element, xyz, chain:line.slice(21,22),
+      water:/^(HOH|WAT|TIP3|TIP4|SOL|SPC)$/.test(line.slice(17,21).trim())});
+  }
+  return {atoms, box};
 }
+
+async function loadStructurePreviews(urls, includePrepared, isCurrent) {
+  async function load(name) {
+    if (!urls[name]) return null;
+    const response = await fetch(urls[name]);
+    if (!response.ok) throw Error('Could not load the saved structure preview.');
+    return parseStructure(await response.text());
+  }
+  try {
+    const [starting, solvated] = await Promise.all([
+      includePrepared ? load('prepared.pdb') : null,
+      load('solvated.pdb')
+    ]);
+    if (!isCurrent()) return;
+    if (includePrepared) savedPreview = starting;
+    solvatedPreview = solvated;
+    draw();
+  } catch (error) {
+    if (isCurrent()) $('structure-preview-help').textContent = error.message;
+  }
+}
+
+function draw() {
+  const view = $('structure-view');
+  view.options[2].disabled = !solvatedPreview?.box;
+  if (view.value === 'water' && view.options[2].disabled) view.value = 'trace';
+  const mode = view.value;
+  const source = mode === 'water' ? solvatedPreview : prepared?.preview || savedPreview || inputPreview;
+  const trace = mode === 'trace';
+  const atoms = (source?.atoms || []).filter(atom => trace
+    ? atom.record === 'ATOM' && atom.name === 'CA' && !atom.water
+    : !['H', 'D', 'T'].includes(atom.element) && (mode !== 'water' || !atom.water || atom.element === 'O'));
+  $('empty').hidden = atoms.length > 0;
+  $('structure-info').textContent = atoms.length
+    ? `${atoms.length.toLocaleString()} ${trace ? 'Cα atoms' : 'atoms shown'}` : 'No structure loaded';
+  $('structure-preview-help').textContent = mode === 'water'
+    ? 'Prepared solute and water oxygens inside the periodic box.'
+    : 'Inspect the input or prepared structure. Build a periodic water box to enable the solvent view.';
+  paintStructure(canvas, atoms, {trace, box:mode === 'water' ? source.box : null,
+    referenceAtoms:mode === 'water' ? source.atoms : atoms, yaw, pitch, zoom});
+}
+
+function paintStructure(target, atoms, {trace, box=null, referenceAtoms=atoms, yaw=0, pitch=0, zoom=1}) {
+  const rect = target.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  target.width = rect.width * ratio; target.height = rect.height * ratio;
+  const ctx = target.getContext('2d');
+  ctx.setTransform(ratio,0,0,ratio,0,0);
+  if (!atoms.length || !rect.width || !rect.height) return;
+  const solute = referenceAtoms.filter(atom => !atom.water);
+  const reference = solute.length ? solute : atoms;
+  const center = [0,1,2].map(k => {
+    const values = reference.map(atom => atom.xyz[k]);
+    return (Math.min(...values) + Math.max(...values)) / 2;
+  });
+  const radius = box ? Math.hypot(...box)/2 : atoms.reduce((max, atom) =>
+    Math.max(max, Math.hypot(...atom.xyz.map((value,k) => value-center[k]))), 1);
+  const scale = Math.min(rect.width,rect.height)*.43/radius*zoom;
+  function project([x,y,z]) {
+    const xx=x*Math.cos(yaw)+z*Math.sin(yaw), zz=-x*Math.sin(yaw)+z*Math.cos(yaw);
+    return [rect.width/2+xx*scale,rect.height/2+(y*Math.cos(pitch)-zz*Math.sin(pitch))*scale];
+  }
+  if (box) {
+    const vertices = Array.from({length:8}, (_,index) =>
+      project(box.map((length,axis) => length * ((index & (1<<axis)) ? .5 : -.5))));
+    ctx.strokeStyle = '#698494'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i=0;i<8;i++) for (const bit of [1,2,4]) {
+      if (i & bit) continue;
+      ctx.moveTo(...vertices[i]); ctx.lineTo(...vertices[i|bit]);
+    }
+    ctx.stroke();
+  }
+  const chains = [...new Set(atoms.map(atom => atom.chain))];
+  const points = atoms.map(atom => project(atom.xyz.map((value,k) => value-center[k])));
+  const elementColors = {N:'#3566ad', O:'#bd5151', S:'#a27c28', P:'#a45a32'};
+  const indices = atoms.map((_,i) => i);
+  if (box) indices.sort((a,b) => Number(atoms[b].water)-Number(atoms[a].water));
+  for (const i of indices) {
+    const atom = atoms[i];
+    const chainColor = colors[chains.indexOf(atom.chain)%colors.length];
+    ctx.strokeStyle = ctx.fillStyle = trace ? chainColor
+      : atom.water ? '#75a6c082' : elementColors[atom.element] || chainColor;
+    ctx.lineWidth=2.5; ctx.lineCap='round';
+    if (trace && i && atoms[i-1].chain===atom.chain &&
+        Math.hypot(...atom.xyz.map((value,k) => value-atoms[i-1].xyz[k]))<4.5) {
+      ctx.beginPath(); ctx.moveTo(...points[i-1]); ctx.lineTo(...points[i]); ctx.stroke();
+    }
+    ctx.beginPath(); ctx.arc(...points[i], atom.water ? 1 : trace ? 2.4 : 2, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+$('structure-view').addEventListener('change', () => {
+  yaw = pitch = $('structure-view').value === 'water' ? .35 : 0;
+  zoom = 1;
+  draw();
+});
 canvas.onpointerdown = e => {dragging=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId);};
 canvas.onpointermove = e => {if(!dragging)return; yaw+=(e.clientX-dragging[0])*.01;pitch+=(e.clientY-dragging[1])*.01;dragging=[e.clientX,e.clientY];draw();};
 canvas.onpointerup = canvas.onpointercancel = () => dragging=null;
@@ -307,11 +416,6 @@ function drawMeasurementChart(id, samples, xField, series, xLabel, yLabel, targe
   }
 }
 function renderMeasurements(record) {
-  if (record.coordinates && record.coordinates.sequence!==coordinateStructure?.sequence) {
-    coordinateStructure=record.coordinates; draw();
-    $('structure-info').textContent=`${record.coordinates.atoms.length} Cα atoms · run ${record.id?.slice(0,8) || ''}`;
-    $('coordinate-status').textContent=`Run ${record.id?.slice(0,8) || ''} Cα snapshot · step ${record.coordinates.step} · ${measuredNumber(record.coordinates.time_ps)} ps. Latest available coordinates; water is omitted.`;
-  }
   const dynamics=record.samples.filter(s=>s.stage==='dynamics');
   const minimum=record.samples.filter(s=>s.stage==='minimization');
   drawMeasurementChart('temperature-plot',dynamics,'time_ps',[{key:'temperature_k',color:'#326ba8',label:'Temperature'}],'Simulation time / ps','K',record.settings.temperature_k);
@@ -372,8 +476,8 @@ function showRunOutputIntervals(record) {
 async function startRunMonitor(identifier, submittedRevision=null) {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(identifier)) return;
   const monitor={id:identifier,revision:submittedRevision};activeRun=monitor;
-  coordinateStructure=null;
-  draw();
+  $('resume-controls').hidden=true;
+  const previewRevision=revision;
   liveRunning=true;refreshEnvironmentButtons();
   try {localStorage.setItem('molvis-live-run',identifier);} catch {}
   let failures=0;
@@ -393,8 +497,9 @@ async function startRunMonitor(identifier, submittedRevision=null) {
       liveRunning=['queued','running','cancelling'].includes(record.status);
       $('stop-run').disabled=!liveRunning || record.status==='cancelling';
       showRunOutputIntervals(record);
+      $('resume-controls').hidden=!record.can_resume;
       $('run-status').textContent=`${record.status} · ${record.progress?.stage || 'waiting'} · ${record.samples.length} measured samples${record.progress?.step!==undefined ? ` · ${record.progress.step}/${record.progress.total_steps} steps` : ''}`;
-      $('run-description').textContent=`Run ${identifier.slice(0,8)} · ${record.settings.solvent_label} · target ${record.settings.temperature_k} K · timestep ${record.settings.timestep_fs} fs · ${record.settings.dynamics_steps ?? 100} requested steps (${(record.settings.dynamics_steps ?? 100)*record.settings.timestep_fs/1000} ps). Measurements belong to this saved run; changing form settings will not alter it. Outputs: ${record.settings.coordinates_interval_steps ? `coordinates every ${record.settings.coordinates_interval_steps} steps` : 'no coordinate preview recorded'}; energy every ${record.settings.energy_interval_steps ?? 10} steps; temperature every ${record.settings.temperature_interval_steps ?? 10} steps.`;
+      $('run-description').textContent=`Run ${identifier.slice(0,8)} · ${record.settings.solvent_label} · target ${record.settings.temperature_k} K · timestep ${record.settings.timestep_fs} fs · ${record.settings.dynamics_steps ?? 100} requested ${record.resumed_from ? 'additional ' : ''}steps (${(record.settings.dynamics_steps ?? 100)*record.settings.timestep_fs/1000} ps). Measurements belong to this saved run; changing form settings will not alter it. Outputs: ${record.settings.coordinates_interval_steps ? `coordinates every ${record.settings.coordinates_interval_steps} steps` : 'no coordinate preview recorded'}; energy every ${record.settings.energy_interval_steps ?? 10} steps; temperature every ${record.settings.temperature_interval_steps ?? 10} steps.`;
       renderMeasurements(record);
       const links=$('run-downloads'),key=`${identifier}-${record.status}-${Object.keys(record.artifact_urls || {}).join(',')}`;
       if (links.dataset.runKey!==key) {
@@ -407,6 +512,10 @@ async function startRunMonitor(identifier, submittedRevision=null) {
         if(record.result) {
           $('run-status').textContent+=` · ${record.result.message}`;
           if(monitor.revision!==null && monitor.revision===revision) showCompatibility(record.result);
+          if (monitor.revision===null && !prepared && !$('pdb').files.length && record.result.storage) {
+            loadStructurePreviews(record.result.storage.download_urls, true,
+              () => activeRun===monitor && revision===previewRevision && !prepared && !$('pdb').files.length);
+          }
         }
         return;
       }
@@ -418,6 +527,27 @@ async function startRunMonitor(identifier, submittedRevision=null) {
     await new Promise(resolve=>setTimeout(resolve,failures ? 1000 : 300));
   }
 }
+$('resume-run').addEventListener('click',async()=>{
+  if (!activeRun || liveRunning || !$('resume-steps').reportValidity()) return;
+  const button=$('resume-run');
+  button.disabled=true;
+  try {
+    const response=await fetch(`/api/runs/${activeRun.id}/resume`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({dynamics_steps:Number($('resume-steps').value)})
+    });
+    const result=await response.json();
+    if (!response.ok) throw Error(result.error || 'Could not resume run.');
+    const url=new URL(location.href);
+    url.searchParams.set('run',result.id);
+    history.replaceState(null,'',url);
+    startRunMonitor(result.id);
+  } catch(error) {
+    $('run-status').textContent=error.message;
+  } finally {
+    button.disabled=false;
+  }
+});
 $('stop-run').addEventListener('click',async()=>{
   if (!activeRun || !liveRunning) return;
   $('stop-run').disabled=true;

@@ -11,11 +11,28 @@ FIELDS = ('sequence','stage','wall_time_s','step','time_ps','iteration','report_
 
 
 class Measurements:
-    def __init__(self, work, target):
+    def __init__(self, work, target, history=()):
         self.work=work; self.target=target; self.started=time.monotonic(); self.sequence=0
         self.json_file=(work/'measurements.jsonl').open('w',buffering=1)
         self.csv_file=(work/'measurements.csv').open('w',newline='',buffering=1)
         self.writer=csv.DictWriter(self.csv_file,fieldnames=FIELDS); self.writer.writeheader()
+
+        if history:
+            self.sequence = history[-1]['sequence']
+            self.started -= history[-1]['wall_time_s']
+            with (work/'dynamics.csv').open('w',newline='') as file:
+                dynamics = csv.DictWriter(file,fieldnames=FIELDS)
+                dynamics.writeheader()
+                for record in history:
+                    self.write(record)
+                    if record['stage']=='dynamics':
+                        dynamics.writerow(record)
+
+    def write(self, record):
+        self.json_file.write(json.dumps(record,allow_nan=False)+'\n')
+        self.writer.writerow(record)
+        self.json_file.flush()
+        self.csv_file.flush()
 
     def emit(self, stage, **values):
         self.sequence+=1
@@ -24,8 +41,7 @@ class Measurements:
                       target_temperature_k=self.target,**values)
         if any(isinstance(value,(int,float)) and not math.isfinite(value) for value in record.values()):
             raise ValueError('Nonfinite OpenMM measurement; run stopped.')
-        self.json_file.write(json.dumps(record,allow_nan=False)+'\n'); self.json_file.flush()
-        self.writer.writerow(record); self.csv_file.flush()
+        self.write(record)
         return record
 
     def minimization_reporter(self):
