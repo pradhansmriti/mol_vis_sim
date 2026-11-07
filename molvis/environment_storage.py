@@ -7,7 +7,7 @@ from uuid import uuid4
 import zipfile
 
 DOWNLOADS = ('prepared.pdb','prepared.psf','solvated.pdb','solvated.psf','system.xml','manifest.json','environment.zip',
-             'readiness.pdb','state.xml','measurements.jsonl','measurements.csv','dynamics.csv')
+             'readiness.pdb','state.xml','checkpoint.chk','checkpoint.json','integrator.xml','measurements.jsonl','measurements.csv','dynamics.csv')
 
 
 def environment_root():

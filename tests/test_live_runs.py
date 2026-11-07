@@ -25,7 +25,7 @@ class LiveRunTests(unittest.TestCase):
 
     def test_samples_visible_before_completion_and_persist_afterwards(self):
         emitted=threading.Event();release=threading.Event();self.addCleanup(release.set)
-        def worker(payload,observer,cancel_event):
+        def worker(payload,observer,cancel_event,work_directory):
             observer(dict(type='sample',data=dict(sequence=1,stage='minimization',potential_energy_kj_mol=-1)))
             observer(dict(type='coordinates',data=dict(sequence=1,step=0,atoms=[])))
             emitted.set();release.wait(3)
@@ -45,7 +45,7 @@ class LiveRunTests(unittest.TestCase):
 
     def test_cancellation_preserves_partial_samples(self):
         emitted=threading.Event()
-        def worker(payload,observer,cancel_event):
+        def worker(payload,observer,cancel_event,work_directory):
             observer(dict(type='sample',data=dict(sequence=1,stage='minimization',potential_energy_kj_mol=-1)))
             emitted.set();cancel_event.wait(3)
             return dict(status='cancelled',message='cancelled')

@@ -6,11 +6,17 @@ import sys
 import time
 
 
+def atomic_write(path, content):
+    temporary=path.with_name(path.name+'.tmp')
+    temporary.write_bytes(content)
+    temporary.replace(path)
+
+
 def run(work):
     started=time.monotonic()
-    def progress(stage):
+    def progress(stage, **values):
         temporary=work/'progress.tmp'
-        temporary.write_text(json.dumps(dict(stage=stage,elapsed_seconds=time.monotonic()-started)))
+        temporary.write_text(json.dumps(dict(stage=stage,elapsed_seconds=time.monotonic()-started,**values)))
         temporary.replace(work/'progress.json')
     progress('loading parameters')
     try:
@@ -63,14 +69,28 @@ def run(work):
         measurements.emit('minimization',report_index=0,potential_energy_kj_mol=energy)
         progress('bounded minimization')
         mm.LocalEnergyMinimizer.minimize(context,10*unit.kilojoule_per_mole/unit.nanometer,20,measurements.minimization_reporter())
-        progress('100 NVT integration steps')
+        steps=settings['dynamics_steps']
+        progress(f'{steps} NVT integration steps',step=0,total_steps=steps)
         context.setVelocitiesToTemperature(settings['temperature_k']*unit.kelvin,2026)
         preview.capture(simulation,force=True)
         reporter=measurements.dynamics_reporter(settings['energy_interval_steps'],settings['temperature_interval_steps'])
         reporter.report(simulation,context.getState(getEnergy=True))
         simulation.reporters.append(reporter)
         simulation.reporters.append(preview)
-        simulation.step(100)
+        def checkpoint():
+            for name,content in [('checkpoint.chk',context.createCheckpoint()),
+                                 ('state.xml',mm.XmlSerializer.serialize(context.getState(getPositions=True,getVelocities=True,getEnergy=True)).encode()),
+                                 ('checkpoint.json',json.dumps(dict(step=simulation.currentStep,time_ps=simulation.currentStep*settings['timestep_fs']/1000,openmm_version=mm.__version__,platform='CPU')).encode())]:
+                atomic_write(work/name,content)
+        atomic_write(work/'system.xml',mm.XmlSerializer.serialize(system).encode())
+        atomic_write(work/'integrator.xml',mm.XmlSerializer.serialize(integrator).encode())
+        checkpoint()
+        while simulation.currentStep<steps:
+            simulation.step(min(100,steps-simulation.currentStep))
+            checkpoint()
+            progress(f'{steps} NVT integration steps',step=simulation.currentStep,total_steps=steps,
+                     time_ps=simulation.currentStep*settings['timestep_fs']/1000)
+
         measurements.close()
         state=context.getState(getEnergy=True,getForces=True,getPositions=True,getVelocities=True)
         energy=state.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
@@ -81,13 +101,12 @@ def run(work):
         from .openmm_validation import coordinates_pdb
         original=work/('solvated.pdb' if box else 'prepared.pdb')
         (work/'readiness.pdb').write_text(coordinates_pdb(original.read_text(),xyz))
-        (work/'state.xml').write_text(mm.XmlSerializer.serialize(state))
-        report.update(readiness=dict(passed=True,minimization_max_iterations=20,dynamics_steps=100,
-                                     timestep_fs=settings['timestep_fs'],duration_ps=100*settings['timestep_fs']/1000,
+        report.update(readiness=dict(passed=True,minimization_max_iterations=20,dynamics_steps=steps,
+                                     timestep_fs=settings['timestep_fs'],duration_ps=steps*settings['timestep_fs']/1000,
                                      final_potential_energy_kj_mol=energy,ensemble='NVT',seed=2026,
                                      friction_per_ps=1,elapsed_seconds=time.monotonic()-started,
                                      note='Bounded execution smoke test, not equilibration or production validation.'),
-                      message='OpenMM ran bounded minimization and 100 NVT steps with finite results. Production execution is not connected.')
+                      message=f'OpenMM ran bounded minimization and {steps} NVT steps with finite results. Equilibration is not established; production execution is not connected.')
         report['measurements']=dict(samples=measurements.sequence,
                                     coordinates_interval_steps=settings['coordinates_interval_steps'],
                                     energy_interval_steps=settings['energy_interval_steps'],
@@ -95,7 +114,8 @@ def run(work):
                                     temperature_source='OpenMM StateDataReporter, including constraint-adjusted degrees of freedom',
                                     minimization_axis='optimizer reports; iteration index may restart during constraint enforcement',
                                     dynamics_axis='simulation time in ps')
-    (work/'system.xml').write_text(mm.XmlSerializer.serialize(system))
+    if not config.get('test_dynamics'):
+        atomic_write(work/'system.xml',mm.XmlSerializer.serialize(system).encode())
     progress('complete')
     return report
 

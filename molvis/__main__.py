@@ -44,6 +44,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200,content,'application/x-ndjson','measurements.jsonl')
             else: self.reply(200,json.dumps(record,allow_nan=False).encode(),'application/json')
             return
+        artifact=re.fullmatch(r'/api/runs/([0-9a-f-]{36})/files/([A-Za-z0-9_.-]+)',self.path)
+        if artifact:
+            from .live_runs import ARTIFACTS, run_root
+            identifier,name=artifact.groups()
+            if name not in ARTIFACTS:
+                self.reply(404,b'Not found','text/plain'); return
+            try:
+                read_run(identifier)
+                content=(run_root()/identifier/'worker'/name).read_bytes()
+            except (ValueError,FileNotFoundError):
+                self.reply(404,b'Run artifact not available','text/plain'); return
+            self.reply(200,content,'application/octet-stream' if name.endswith('.chk') else 'text/plain; charset=utf-8',name); return
         environment = re.fullmatch(r'/api/environments/([0-9a-f-]{36})/files/([A-Za-z0-9_.-]+)',self.path)
         if environment:
             identifier,filename=environment.groups()

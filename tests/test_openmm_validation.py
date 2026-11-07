@@ -90,6 +90,26 @@ class OpenMMValidationTests(unittest.TestCase):
         result = check_compatibility(payload | dict(settings=dict(solvent_model='vacuum')))
         self.assertEqual(result['status'],'failed')
 
+    def test_two_ps_and_checkpoint_reload(self):
+        import openmm as mm
+        from openmm import app,unit
+        from molvis.compatibility import check_compatibility
+        work=self.root/'persistent'
+        result=check_compatibility(dict(pdb=(self.preparation/'prepared.pdb').read_text(),psf=(self.preparation/'prepared.psf').read_text(),
+            topologies=[dict(name='test.rtf',text=RTF)],parameters=[dict(name='test.prm',text=PRM)],
+            settings=dict(solvent_model='vacuum',dynamics_steps=1000),test_dynamics=True),work_directory=work)
+        self.assertEqual(result['status'],'compatible',result)
+        self.assertEqual(result['readiness']['duration_ps'],2)
+        self.assertEqual(json.loads((work/'checkpoint.json').read_text())['step'],1000)
+        system=mm.XmlSerializer.deserialize((work/'system.xml').read_text())
+        integrator=mm.XmlSerializer.deserialize((work/'integrator.xml').read_text())
+        simulation=app.Simulation(app.CharmmPsfFile(str(work/'prepared.psf')).topology,system,integrator,
+                                  mm.Platform.getPlatformByName('CPU'),{'Threads':'1'})
+        simulation.loadCheckpoint(str(work/'checkpoint.chk'))
+        self.assertEqual(simulation.currentStep,1000)
+        self.assertAlmostEqual(simulation.context.getState().getTime().value_in_unit(unit.picosecond),2)
+        self.assertIn('checkpoint.chk',result['storage']['download_urls'])
+
     def test_readiness_test_runs_bounded_dynamics(self):
         from molvis.compatibility import check_compatibility
         events=[]

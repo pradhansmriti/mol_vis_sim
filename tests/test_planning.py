@@ -100,7 +100,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/runs/12345678-1234-1234-1234-123456789abc/cancel', '{}', {'Origin':'https://example.com'})[0], 403)
 
     def test_live_run_endpoints_and_measurement_exports(self):
-        def worker(payload,observer,cancel_event):
+        def worker(payload,observer,cancel_event,work_directory):
+            work_directory.mkdir(parents=True)
+            (work_directory/'checkpoint.chk').write_bytes(b'checkpoint-test')
+            (work_directory/'config.json').write_text('private worker configuration')
             observer(dict(type='sample',data=dict(sequence=1,stage='dynamics',step=10,time_ps=.02,temperature_k=301)))
             return dict(status='compatible',message='done')
         with patch('molvis.live_runs.check_compatibility',side_effect=worker):
@@ -113,6 +116,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status,200);self.assertIn(b'temperature_k',data);self.assertIn(b'301',data)
         status,data=self.request('GET','/api/runs/'+identifier+'/measurements.jsonl')
         self.assertEqual(json.loads(data)['step'],10)
+        self.assertEqual(self.request('GET','/api/runs/'+identifier+'/files/checkpoint.chk'),(200,b'checkpoint-test'))
+        self.assertEqual(self.request('GET','/api/runs/'+identifier+'/files/config.json')[0],404)
         self.assertEqual(self.request('GET','/?run='+identifier)[0],200)
 
     def test_unknown_live_run_and_invalid_start(self):

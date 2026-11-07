@@ -30,9 +30,10 @@ def solvent_settings(settings):
                 nonbonded_cutoff_nm=1.2 if model == 'charmm_tip3p' else None,
                 switch_distance_nm=1.0 if model == 'charmm_tip3p' else None,
                 timestep_fs=number(settings, 'timestep_fs', 2, .1, 2))
-    for channel in ('coordinates','energy','temperature'):
-        key=channel+'_interval_steps'
-        value=number(settings,key,10,1,100000)
+    step_settings=[('dynamics_steps',100,1000)]
+    step_settings.extend((channel+'_interval_steps',10,100000) for channel in ('coordinates','energy','temperature'))
+    for key,default,maximum in step_settings:
+        value=number(settings,key,default,1,maximum)
         if not value.is_integer(): raise ValueError(f'{key} must be a whole number of simulation steps.')
         result[key]=int(value)
     if model == 'charmm_tip3p' and result['salt_molar']:
@@ -44,7 +45,7 @@ def solvent_settings(settings):
     return result
 
 
-def observe_worker(command, repository, work, observer, cancel_event):
+def observe_worker(command, repository, work, observer, cancel_event, timeout=240):
     """Poll flushed worker data without keeping the HTTP request open."""
     position=0; last_progress=None; last_frame=None
     def drain():
@@ -71,7 +72,7 @@ def observe_worker(command, repository, work, observer, cancel_event):
                     position+=len(line)
     with (work/'worker.log').open('w') as log:
         process=subprocess.Popen(command,cwd=repository,stdout=log,stderr=subprocess.STDOUT,start_new_session=os.name=='posix')
-        deadline=time.monotonic()+240
+        deadline=time.monotonic()+timeout
         def stop():
             if process.poll() is None:
                 try:
@@ -90,7 +91,7 @@ def observe_worker(command, repository, work, observer, cancel_event):
                     stop(); drain()
                     return subprocess.CompletedProcess(command,-1),True
                 if time.monotonic()>deadline:
-                    stop(); drain(); raise subprocess.TimeoutExpired(command,240)
+                    stop(); drain(); raise subprocess.TimeoutExpired(command,timeout)
                 time.sleep(.1)
             drain()
         except BaseException:
@@ -98,7 +99,7 @@ def observe_worker(command, repository, work, observer, cancel_event):
     return subprocess.CompletedProcess(command,process.returncode,stdout='',stderr=(work/'worker.log').read_text(errors='replace')[-4000:]),False
 
 
-def check_compatibility(payload, observer=None, cancel_event=None):
+def check_compatibility(payload, observer=None, cancel_event=None, work_directory=None):
     pdb, psf = text_file(payload.get('pdb'), 'PDB'), text_file(payload.get('psf'), 'PSF')
     pair = validate_pair(pdb, psf)
     settings = solvent_settings(payload.get('settings', {}))
@@ -128,7 +129,8 @@ def check_compatibility(payload, observer=None, cancel_event=None):
     local_python = repository/'.venv'/'bin'/'python'
     python = os.environ.get('MOLVIS_OPENMM_PYTHON', str(local_python) if local_python.is_file() else sys.executable)
     with TemporaryDirectory(prefix='molvis-compatibility-') as directory:
-        work = Path(directory)
+        work = Path(work_directory) if work_directory is not None else Path(directory)
+        work.mkdir(parents=True,exist_ok=True)
         (work/'prepared.pdb').write_text(pdb)
         (work/'prepared.psf').write_text(psf)
         config = dict(settings=settings, topologies=[], parameters=[], water=[], test_dynamics=payload.get('test_dynamics') is True)
@@ -138,19 +140,20 @@ def check_compatibility(payload, observer=None, cancel_event=None):
                 (work/name).write_text(item['text'])
                 config[kind].append(name)
         (work/'config.json').write_text(json.dumps(config))
+        timeout=240 if not config['test_dynamics'] or settings['dynamics_steps']<=100 else 240+2*settings['dynamics_steps']
         try:
             command=[python,'-m','molvis.compatibility_worker',str(work)]
             if observer:
-                process,cancelled=observe_worker(command,repository,work,observer,cancel_event)
+                process,cancelled=observe_worker(command,repository,work,observer,cancel_event,timeout)
                 if cancelled:
                     result.update(status='cancelled',message='OpenMM run cancelled. Partial measurements are retained in the live run record.')
                     return result
             else:
                 process = subprocess.run(command, cwd=repository,
-                                     capture_output=True, text=True, timeout=240)
+                                     capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             progress=json.loads((work/'progress.json').read_text()) if (work/'progress.json').is_file() else {}
-            result.update(status='incomplete', message='OpenMM environment/readiness check exceeded 240 seconds; no successful readiness result was accepted.', progress=progress)
+            result.update(status='incomplete', message=f'OpenMM environment/readiness check exceeded {timeout} seconds; no successful readiness result was accepted.', progress=progress)
             return result
         except OSError:
             result.update(status='unavailable', message='OpenMM interpreter could not be started. Check MOLVIS_OPENMM_PYTHON.')

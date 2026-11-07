@@ -6,7 +6,7 @@ The agreed product design, specification, and interactive preview are in [output
 
 ![Molecular workspace with protein preparation, workflow planning, and live OpenMM temperature, energy, and minimization plots](docs/images/workspace-preview.jpg)
 
-Current local interface with measured villin readiness-run traces · updated November 5, 2026. This preview is refreshed with interface changes.
+Current local interface with measured ubiquitin periodic-water traces from the 2 ps NVT test · updated November 7, 2026. This preview is refreshed with interface changes.
 
 ## Run locally
 
@@ -99,21 +99,26 @@ Add `--vmd /path/to/vmd` to generate and compare actual VMD references. Without 
 python3 -m unittest discover -s tests -v
 .prep-env/bin/python -m unittest discover -s tests -v
 node --check web/app.js
+node tests/test_display_refresh.cjs
 ```
 
 ## Local OpenMM diagnostic
 
 ### Live measurements
 
-After preparation and solvent selection, **Run + plot readiness (100 steps)** starts an OpenMM worker in the background. The **Live energy and temperature** panel updates while it runs: minimization potential energy versus optimizer report number, then measured temperature and potential/kinetic/total energy versus simulation time. Dynamics are sampled at the selected step intervals (default 10 steps, or 0.02 ps at 2 fs); the target temperature is a dashed reference line. Temperature is not reported during minimization. Hover over points or use the latest-values table to inspect readings.
+After preparation and solvent selection, **Run + plot NVT** starts an OpenMM worker in the background. The **Live energy and temperature** panel updates while it runs: minimization potential energy versus optimizer report number, then measured temperature and potential/kinetic/total energy versus simulation time. Dynamics are sampled at the selected step intervals (default 10 steps, or 0.02 ps at 2 fs); the target temperature is a dashed reference line. Temperature is not reported during minimization. Hover over points or use the latest-values table to inspect readings.
 
 **Output intervals** are independent positive whole numbers of simulation steps for coordinates, energy and temperature (default 10 steps each). For a 2 fs integration timestep, every 10 steps means every 20 fs (0.02 ps). Choose intervals before starting; each run records and freezes them. They control actual OpenMM dynamics reports and saved energy/temperature samples, independent of computer speed. The interface shows the corresponding simulated time for each choice. Step 0 is included; minimization remains indexed by optimizer reports because it does not advance simulation time. Unsampled fields are blank in CSV and null in JSONL; plots and latest-value rows use each channel's own timestamps.
 
-New readiness runs capture actual Cα coordinates at step 0 after minimization and every selected coordinate interval. The browser polls for progress and displays the latest available snapshot, so fast runs can produce multiple outputs between screen updates. Only the latest snapshot is retained in the live run record, including after cancellation or restart; this is a lightweight preview, not a saved trajectory. The final PDB remains available separately, even if the final step is not on an output boundary. Earlier saved runs have no coordinate snapshots. Intervals longer than the current 100-step test yield only the initial output. Performance comparisons on real proteins remain part of stress testing.
+New readiness runs capture actual Cα coordinates at step 0 after minimization and every selected coordinate interval. The browser polls for progress and displays the latest available snapshot, so fast runs can produce multiple outputs between screen updates. Only the latest snapshot is retained in the live run record, including after cancellation or restart; this is a lightweight preview, not a saved trajectory. The final PDB remains available separately, even if the final step is not on an output boundary. Earlier saved runs have no coordinate snapshots. Intervals longer than the selected test length yield only the initial output. See [the two-protein stress-test report](outputs/stress-testing.md) for output checks, reconnect behavior, timing results and their limits.
+
+**NVT test length** accepts 1–1,000 integration steps (default 100). At 2 fs, 1,000 steps is 2 ps; this is separate from the proposed production duration. Tests still use the existing 20-iteration-per-pass minimization setting and do not assert convergence or equilibration. Progress reports completed steps, and portable state XML plus a binary checkpoint are saved at step 0 and every 100 steps, including the final partial block.
+
+Live worker files persist under `runs/live/<id>/worker/`, including after cancellation or failure. Available checkpoint, state, System and integrator downloads appear while the job runs; successful environment ZIPs also contain them. Checkpoint loading requires a matching System, OpenMM version, platform and hardware; the app does not automatically resume runs. State XML is more portable but does not retain the random-number-generator state. Interactive compatibility and ≤100-step tests retain a 240-second timeout; longer bounded tests allow `240 + 2 × steps` seconds (2,240 seconds for 1,000 steps).
 
 Runs use a frozen copy of the submitted settings. **Stop run** terminates the worker and retains partial measurements. Refreshing reconnects to the last run; `/?run=<run-id>#live-monitor` opens a saved trace. Interrupted server sessions are labeled and are not automatically resumed. Live CSV/JSONL downloads remain available, including partial traces, and completed environment ZIPs include measurements plus OpenMM's dynamics CSV. Records persist under `runs/live/<id>/`; successful environment artifacts remain in `runs/environments/<id>/`. Only one live readiness run is allowed at a time.
 
-These are real bounded readiness measurements, not an implementation of the proposed full production duration or a declaration of stabilization. See [the live visualization validation](outputs/live-measurements.md).
+See [the completed 2 ps ubiquitin test](outputs/two-ps-nvt.md) for temperature trends and checkpoint verification. These are real bounded readiness measurements, not an implementation of the proposed full production duration or a declaration of stabilization. See [the live visualization validation](outputs/live-measurements.md).
 
 Solvation and salt default to **Decide later**. After protein preparation and structure review, open **Later: solvation, salt and OpenMM compatibility** to choose an environment. Until then, exported plans leave solvent method, salt and box settings unset and record compatibility as deferred. Select vacuum, implicit OBC2, implicit GBn2, or explicit CHARMM-modified TIP3P, and upload matching CHARMM parameter/topology files to check compatibility. For vacuum and implicit models, an isolated worker actually creates the OpenMM System with HBonds constraints and evaluates finite energy/forces on the CPU. Implicit salt defaults to **0.2 M ionic screening**, not added ions. OpenMM OBC2/GBn2 are generalized Born models, not the exact NAMD GBIS implementation. Explicit CHARMM-modified TIP3P now builds a cubic periodic water box using your local `toppar_water_ions.str`, preserving the supplied protein PSF, types, charges, CMAP terms and coordinates. PME uses a 1.2 nm cutoff and switching from 1.0 nm. Explicit salt is fixed at 0 M, `neutralize=False`, and no Na+, Cl- or counterions are added. Missing files, engine availability, and parameter failures have distinct statuses. Proposing a workflow repeats the check for the submitted settings and stores its result and input hashes in the exported plan. Changed inputs invalidate the displayed check. **Run + plot readiness (100 steps)** additionally performs minimization (20 iterations per optimizer pass; constraint enforcement may restart it), initializes velocities at the selected temperature, and advances 100 NVT steps at the selected timestep. Both compatibility and readiness outputs are saved separately in `runs/environments/<id>/` with direct downloads for the solvated PSF/PDB, serialized System, manifest and ZIP; readiness also saves final coordinates and State XML. This does not run the proposed full production duration. See [water-box and readiness results](outputs/waterbox-readiness.md).
 
@@ -135,10 +140,10 @@ Each new output directory contains `report.json` (settings, input hashes, engine
 
 ## Next implementation
 
-Next priorities (November 5, 2026):
+Next priorities (November 7, 2026):
 
-1. Stress-test the preparation and live readiness workflow with ubiquitin and villin, including failed inputs, stop/reconnect behavior, and retained downloads.
-2. Add a separate, longer minimization and NVT equilibration stage with explicit settings and recorded energy, temperature and structural checks. The current 0.2 ps readiness run does not demonstrate stabilization.
+1. Initial two-protein stress checks passed on November 6, including generation/upload, independent output intervals, cancellation, reconnect and downloads; see [results and measured coordinate-output cost](outputs/stress-testing.md). Broader system sizes and longer runs remain untested.
+2. Add checkpoint resume and verify that a continued run preserves simulation time and appends measurements. Use the saved 2 ps ubiquitin state for a longer NVT relaxation check. Review temperature, potential energy and protein structure across time windows before starting production.
 3. Connect a reviewed production runner with trajectory output, checkpoints, restart controls and reproducibility metadata after those checks pass. Review the charged periodic-system choice before production; ion addition remains deferred.
 4. Record a short walkthrough for the website soon, once the workflow is stable: upload or generate PSF/PDB → inspect the structure → select solvent and a periodic water box → run and follow the measurements → download results. Clearly distinguish recorded playback from a live run, and readiness testing from equilibration or production. Recording is planned, not requested yet.
 

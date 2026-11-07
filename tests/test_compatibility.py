@@ -13,6 +13,11 @@ class CompatibilityTests(unittest.TestCase):
             with self.subTest(value=value),self.assertRaises(ValueError):
                 solvent_settings(dict(energy_interval_steps=value))
 
+    def test_bounded_dynamics_length_validation(self):
+        self.assertEqual(solvent_settings({'dynamics_steps':1000})['dynamics_steps'],1000)
+        for steps in (0,1001,1.5,True):
+            with self.subTest(steps=steps),self.assertRaises(ValueError): solvent_settings({'dynamics_steps':steps})
+
     def test_deferred_environment_does_not_assign_solvent_or_salt(self):
         plan = create_plan(dict(pdb=PDB,psf=PSF,check_compatibility=True))
         self.assertEqual(plan['compatibility']['status'],'deferred')

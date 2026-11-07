@@ -36,7 +36,7 @@ def start_run(payload):
         identifier=str(uuid4()); directory=run_root()/identifier; directory.mkdir(parents=True)
         record=dict(id=identifier,status='queued',settings=settings,progress=dict(stage='queued'),result=None,
                     samples_url=f'/api/runs/{identifier}/measurements.jsonl',
-                    note='Real measurements from a bounded 100-step readiness run; stabilization is not established.')
+                    note=f'Real measurements from a bounded {settings["dynamics_steps"]}-step NVT test; stabilization is not established.')
         job=dict(directory=directory,record=record,samples=[],cancel=threading.Event())
         _jobs[identifier]=job; (directory/'measurements.jsonl').write_text(''); persist(job)
         def observe(event):
@@ -51,7 +51,7 @@ def start_run(payload):
         def execute():
             with _lock: record['status']='running'; persist(job)
             try:
-                result=check_compatibility(dict(payload,test_dynamics=True),observer=observe,cancel_event=job['cancel'])
+                result=check_compatibility(dict(payload,test_dynamics=True),observer=observe,cancel_event=job['cancel'],work_directory=directory/'worker')
                 with _lock:
                     record['result']=result
                     record['status']='completed' if result['status']=='compatible' else result['status']
@@ -68,7 +68,7 @@ def read_run(identifier):
     with _lock:
         job=_jobs.get(identifier)
         if job:
-            return json.loads(json.dumps(dict(job['record'],samples=job['samples']),allow_nan=False))
+            return json.loads(json.dumps(dict(job['record'],samples=job['samples'],artifact_urls=artifact_urls(identifier)),allow_nan=False))
         path=run_root()/identifier/'run.json'
         if not path.is_file(): raise FileNotFoundError('Run not found.')
         record=json.loads(path.read_text())
@@ -76,6 +76,7 @@ def read_run(identifier):
             record.update(status='interrupted',note='Server restarted; partial measurements retained. Run is not resumed automatically.')
         samples=run_root()/identifier/'measurements.jsonl'
         record['samples']=[json.loads(line) for line in samples.read_text().splitlines() if line.strip()]
+        record['artifact_urls']=artifact_urls(identifier)
         return record
 
 
@@ -94,3 +95,11 @@ def shutdown():
         jobs=list(_jobs.values())
         for job in jobs: job['cancel'].set()
     for job in jobs: job['thread'].join(timeout=5)
+
+
+ARTIFACTS=('checkpoint.chk','checkpoint.json','state.xml','system.xml','integrator.xml')
+
+
+def artifact_urls(identifier):
+    return {name:f'/api/runs/{identifier}/files/{name}' for name in ARTIFACTS
+            if (run_root()/identifier/'worker'/name).is_file()}

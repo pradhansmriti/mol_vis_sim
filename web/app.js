@@ -97,6 +97,7 @@ $('prepare').addEventListener('click', async () => {
 function refreshEnvironmentButtons() {
   const disabled = !prepared || preparing || checking || liveRunning || $('solvent-model').value === 'deferred';
   for(const channel of ['coordinates','energy','temperature']) $(channel+'-interval').disabled=liveRunning || checking;
+  $('readiness-steps').disabled=liveRunning || checking;
   $('check-compatibility').disabled = disabled;
   $('test-readiness').disabled = disabled;
   $('propose').disabled = !prepared || preparing || checking || liveRunning;
@@ -107,7 +108,7 @@ function outputIntervals() {
 }
 function environmentSettings() {
   if ($('solvent-model').value === 'deferred') return {...outputIntervals(),solvent_model:'deferred',temperature_k:$('temperature').value};
-  return {...outputIntervals(),solvent_model:$('solvent-model').value,salt_molar:['obc2','gbn2'].includes($('solvent-model').value) ? $('salt-molar').value : 0,
+  return {...outputIntervals(),dynamics_steps:Number($('readiness-steps').value),solvent_model:$('solvent-model').value,salt_molar:['obc2','gbn2'].includes($('solvent-model').value) ? $('salt-molar').value : 0,
     padding_nm:$('solvent-model').value === 'charmm_tip3p' ? $('padding-nm').value : 1,temperature_k:$('temperature').value,timestep_fs:$('timestep').value};
 }
 function showCompatibility(result) {
@@ -147,7 +148,7 @@ async function runEnvironmentCheck(readiness=false) {
   const submittedRevision = revision, pair = prepared, settings = environmentSettings();
   checking = true; refreshEnvironmentButtons();
   $('environment-downloads').hidden=true;
-  $('compatibility-status').textContent = readiness ? 'Building the selected environment and running a bounded OpenMM readiness test…' : 'Building/checking the selected environment in OpenMM…';
+  $('compatibility-status').textContent = readiness ? 'Building the selected environment and running the requested bounded NVT test…' : 'Building/checking the selected environment in OpenMM…';
   try {
     const [topologies,parameters,water] = await Promise.all([readFiles('topologies'),readFiles('parameters'),settings.solvent_model==='charmm_tip3p' ? readFiles('water-files') : []]);
     if (revision !== submittedRevision) return;
@@ -308,6 +309,7 @@ function drawMeasurementChart(id, samples, xField, series, xLabel, yLabel, targe
 function renderMeasurements(record) {
   if (record.coordinates && record.coordinates.sequence!==coordinateStructure?.sequence) {
     coordinateStructure=record.coordinates; draw();
+    $('structure-info').textContent=`${record.coordinates.atoms.length} Cα atoms · run ${record.id?.slice(0,8) || ''}`;
     $('coordinate-status').textContent=`Run ${record.id?.slice(0,8) || ''} Cα snapshot · step ${record.coordinates.step} · ${measuredNumber(record.coordinates.time_ps)} ps. Latest available coordinates; water is omitted.`;
   }
   const dynamics=record.samples.filter(s=>s.stage==='dynamics');
@@ -328,10 +330,18 @@ function renderMeasurements(record) {
       : `Potential ${measuredNumber(latest.potential_energy_kj_mol)} · kinetic ${measuredNumber(latest.kinetic_energy_kj_mol)} · total ${measuredNumber(latest.total_energy_kj_mol)} kJ/mol`;
   }
 }
-function updateOutputSpacing() {
+function updateReadinessLength(timestep=Number($('timestep').value)) {
+  const steps=Number($('readiness-steps').value),ps=steps*timestep/1000;
+  $('readiness-spacing').textContent=`${steps} steps × ${timestep} fs = ${ps.toLocaleString(undefined,{maximumFractionDigits:6})} ps`;
+  $('test-readiness').textContent=`Run + plot NVT (${steps} steps)`;
+}
+$('readiness-steps').addEventListener('input',()=>{updateReadinessLength();settingsChanged({target:$('readiness-steps')});});
+$('timestep').addEventListener('input',()=>updateReadinessLength());
+updateReadinessLength();
+function updateOutputSpacing(timestep=Number($('timestep').value)) {
   for(const channel of ['coordinates','energy','temperature']) {
-    const steps=Number($(channel+'-interval').value),fs=steps*Number($('timestep').value);
-    $(channel+'-spacing').textContent=Number.isInteger(steps) && steps>0 ? `${steps} steps × ${$('timestep').value} fs = ${measuredNumber(fs)} fs (${(fs/1000).toLocaleString(undefined,{maximumFractionDigits:6})} ps)` : 'Enter a positive whole number of steps.';
+    const steps=Number($(channel+'-interval').value),fs=steps*timestep;
+    $(channel+'-spacing').textContent=Number.isInteger(steps) && steps>0 ? `${steps} steps × ${timestep} fs = ${measuredNumber(fs)} fs (${(fs/1000).toLocaleString(undefined,{maximumFractionDigits:6})} ps)` : 'Enter a positive whole number of steps.';
   }
 }
 for(const channel of ['coordinates','energy','temperature']) {
@@ -345,8 +355,19 @@ for(const channel of ['coordinates','energy','temperature']) {
     if(control.validity.valid) {try {localStorage.setItem('molvis-'+channel+'-interval-steps',control.value);} catch {}}
   });
 }
-$('timestep').addEventListener('input',updateOutputSpacing);
+$('timestep').addEventListener('input',()=>updateOutputSpacing());
 updateOutputSpacing();
+
+function showRunOutputIntervals(record) {
+  const running=['queued','running','cancelling'].includes(record.status);
+  $('display-frequency').querySelector('legend').textContent=running ? 'Output intervals · current run' : 'Output intervals · next run';
+  if(running) {
+    $('readiness-steps').value=record.settings.dynamics_steps ?? 100;
+    for(const channel of ['coordinates','energy','temperature']) $(channel+'-interval').value=record.settings[channel+'_interval_steps'] ?? 10;
+  }
+  updateOutputSpacing(running ? record.settings.timestep_fs : Number($('timestep').value));
+  updateReadinessLength(running ? record.settings.timestep_fs : Number($('timestep').value));
+}
 
 async function startRunMonitor(identifier, submittedRevision=null) {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(identifier)) return;
@@ -371,13 +392,14 @@ async function startRunMonitor(identifier, submittedRevision=null) {
       failures=0;
       liveRunning=['queued','running','cancelling'].includes(record.status);
       $('stop-run').disabled=!liveRunning || record.status==='cancelling';
-      $('run-status').textContent=`${record.status} · ${record.progress?.stage || 'waiting'} · ${record.samples.length} measured samples`;
-      $('run-description').textContent=`Run ${identifier.slice(0,8)} · ${record.settings.solvent_label} · target ${record.settings.temperature_k} K · timestep ${record.settings.timestep_fs} fs. Measurements belong to this saved run; changing form settings will not alter it. Outputs: ${record.settings.coordinates_interval_steps ? `coordinates every ${record.settings.coordinates_interval_steps} steps` : 'no coordinate preview recorded'}; energy every ${record.settings.energy_interval_steps ?? 10} steps; temperature every ${record.settings.temperature_interval_steps ?? 10} steps.`;
+      showRunOutputIntervals(record);
+      $('run-status').textContent=`${record.status} · ${record.progress?.stage || 'waiting'} · ${record.samples.length} measured samples${record.progress?.step!==undefined ? ` · ${record.progress.step}/${record.progress.total_steps} steps` : ''}`;
+      $('run-description').textContent=`Run ${identifier.slice(0,8)} · ${record.settings.solvent_label} · target ${record.settings.temperature_k} K · timestep ${record.settings.timestep_fs} fs · ${record.settings.dynamics_steps ?? 100} requested steps (${(record.settings.dynamics_steps ?? 100)*record.settings.timestep_fs/1000} ps). Measurements belong to this saved run; changing form settings will not alter it. Outputs: ${record.settings.coordinates_interval_steps ? `coordinates every ${record.settings.coordinates_interval_steps} steps` : 'no coordinate preview recorded'}; energy every ${record.settings.energy_interval_steps ?? 10} steps; temperature every ${record.settings.temperature_interval_steps ?? 10} steps.`;
       renderMeasurements(record);
-      const links=$('run-downloads'),key=`${identifier}-${record.status}`;
+      const links=$('run-downloads'),key=`${identifier}-${record.status}-${Object.keys(record.artifact_urls || {}).join(',')}`;
       if (links.dataset.runKey!==key) {
         links.dataset.runKey=key;links.replaceChildren();
-        const urls={'measurements.jsonl':`/api/runs/${identifier}/measurements.jsonl`,'measurements.csv':`/api/runs/${identifier}/measurements.csv`,...(record.result?.storage?.download_urls || {})};
+        const urls={'measurements.jsonl':`/api/runs/${identifier}/measurements.jsonl`,'measurements.csv':`/api/runs/${identifier}/measurements.csv`,...(record.artifact_urls || {}),...(record.result?.storage?.download_urls || {})};
         for(const [name,url] of Object.entries(urls)) {const link=document.createElement('a');link.href=url;link.download=name;link.textContent=`Download ${name}`;links.append(link);}
       }
       refreshEnvironmentButtons();
