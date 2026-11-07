@@ -11,7 +11,26 @@
 
 #display-frequency{border:1px solid var(--line);border-radius:8px;margin:16px 0;padding:12px 16px}#display-frequency legend{font-size:12px;font-weight:600;padding:0 6px}#display-frequency .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}#display-frequency input{display:block;width:100%;margin-top:6px;padding:9px;border:1px solid var(--line);border-radius:6px;background:#fafbf9;color:inherit;font:inherit}#display-frequency input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}@media(max-width:650px){#display-frequency .grid{grid-template-columns:1fr}}
 
-#structure-view {
+.structure-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin-top: 12px;
+}
+.structure-toolbar label {
+  margin: 0;
+}
+.structure-toolbar select {
+  display: block;
   max-width: 100%;
   margin-top: 4px;
+  padding: 7px;
+  color: inherit;
+  background: #fafbf9;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.structure-toolbar label:has(input) {
+  align-self: center;
 }

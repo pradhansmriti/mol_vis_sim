@@ -67,7 +67,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(404,b'Environment file not found','text/plain'); return
             mime='application/zip' if filename.endswith('.zip') else 'application/json' if filename.endswith('.json') else 'text/plain; charset=utf-8'
             self.reply(200,content,mime,filename=filename); return
-        download = re.fullmatch(r'/api/preparations/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/files/(prepared\.pdb|prepared\.psf|manifest\.json|preparation\.zip)', self.path)
+        download = re.fullmatch(r'/api/preparations/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/files/(prepared\.pdb|prepared\.psf|protein\.pdb|manifest\.json|preparation\.zip)', self.path)
         if download:
             preparation_id, filename = download.groups()
             try:

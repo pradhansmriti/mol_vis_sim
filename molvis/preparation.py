@@ -320,6 +320,8 @@ def preparation_result(pdb, psf, mode, parameters, pair, detail, topologies, sou
                    manifest=str(destination / 'manifest.json'), bundle=str(destination / 'preparation.zip'),
                    download_urls={name: f'/api/preparations/{preparation_id}/files/{name}'
                                   for name in ('prepared.pdb', 'prepared.psf', 'manifest.json', 'preparation.zip')})
+    if protein_pdb is not None:
+        storage['download_urls']['protein.pdb'] = f'/api/preparations/{preparation_id}/files/protein.pdb'
     manifest = dict(mode=mode, state='pair_checked', pair=pair, details=detail,
                     storage=storage,
                     parameters=[dict(name=f['name'], sha256=digest(f['text'])) for f in parameters],

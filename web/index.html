@@ -18,12 +18,25 @@
 </section>
 <div class="workspace"><section class="viewer">
   <div class="section-head"><h2>2. Structures</h2><span id="structure-info" class="muted">No structure loaded</span></div>
-  <label for="structure-view">Preview view</label>
-  <select id="structure-view">
-    <option value="trace">Cα trace</option>
-    <option value="heavy">All atoms except hydrogen</option>
-    <option value="water" disabled>Periodic water box</option>
-  </select>
+  <div class="structure-toolbar">
+    <label for="structure-stage">Structure
+      <select id="structure-stage">
+        <option value="source">Original PDB</option>
+        <option value="protein">Protein selection</option>
+        <option value="prepared">Prepared PSF/PDB</option>
+        <option value="solvated">Periodic water box</option>
+      </select>
+    </label>
+    <label for="structure-view">Protein view
+      <select id="structure-view">
+        <option value="trace">Cα trace</option>
+        <option value="atoms">Protein atoms</option>
+        <option value="heavy">All atoms except hydrogen</option>
+      </select>
+    </label>
+    <label><input id="structure-water" type="checkbox"> Water oxygens</label>
+    <button id="reset-structure-view" type="button">Reset view</button>
+  </div>
   <div class="scene"><canvas id="structure" aria-label="Starting structure preview"></canvas>
     <div id="empty">Your protein goes here.<small>Choose a PDB file to preview the starting structure.</small></div>
     <span class="scene-label">Drag to rotate · scroll to zoom</span>

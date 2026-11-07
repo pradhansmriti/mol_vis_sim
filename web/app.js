@@ -1,10 +1,11 @@
 const $ = id => document.getElementById(id);
-let plan = null, pdb = '', yaw = 0, pitch = 0, zoom = 1, dragging = null, revision = 0, prepared = null, preparing = false, checking = false;
+let plan = null, pdb = '', yaw = .45, pitch = .25, zoom = 1, dragging = null, revision = 0, prepared = null, preparing = false, checking = false;
 let implicitSalt = '0.2', previousSolvent = 'deferred';
 let liveRunning = false, activeRun = null;
 
 const canvas = $('structure');
-let inputPreview = null, savedPreview = null, solvatedPreview = null;
+let inputPreview = null, proteinPreview = null, savedPreview = null, solvatedPreview = null;
+const structureControls = new Set(['structure-stage', 'structure-view', 'structure-water']);
 const colors = ['#26785b','#d09843','#5188a3','#9c6d9c'];
 function invalidate() {
   solvatedPreview = null;
@@ -19,9 +20,10 @@ function invalidate() {
 }
 const preparationInputs = new Set(['pdb','psf','topologies','parameters','histidine','first-patch','last-patch','hydrogens','confirm-guess','prep-mode']);
 function settingsChanged(event) {
-  if (event.target.id === 'structure-view') return;
+  if (structureControls.has(event.target.id)) return;
   if (preparationInputs.has(event.target.id)) {
     savedPreview = null;
+    proteinPreview = null;
     prepared = null; $('prep-downloads').hidden = true;
     $('prep-location').hidden = true;
     $('prep-status').textContent = 'Inputs changed. Prepare the files again.';
@@ -70,7 +72,13 @@ $('prepare').addEventListener('click', async () => {
     const result = await response.json();
     if (submittedRevision !== revision) return;
     if (!response.ok) throw Error(result.error || 'Preparation failed.');
-    prepared = result; prepared.preview = parseStructure(result.pdb); pdb = result.pdb; yaw = pitch = 0; zoom = 1;
+    prepared = result;
+    prepared.preview = parseStructure(result.pdb, result.psf);
+    inputPreview = parseStructure(inputPdb);
+    pdb = result.pdb;
+    $('structure-stage').value = 'prepared';
+    loadProteinPreview(result.storage.download_urls['protein.pdb'], result);
+    resetStructureCamera();
     $('prep-downloads').hidden = false;
     $('prep-location').textContent = `Saved on the server: ${result.storage.directory} — prepared.pdb, prepared.psf, manifest.json and preparation.zip. Files remain after this page closes. Browser downloads are separate copies saved to your browser’s download location.`;
     $('prep-location').hidden = false;
@@ -221,7 +229,7 @@ $('plan-form').addEventListener('submit', async event => {
     const result = await response.json();
     if (revision !== submittedRevision) return;
     if (!response.ok) throw Error(result.error || 'Could not create a plan.');
-    plan = result; yaw = pitch = 0; zoom = 1;
+    plan = result;
     showCompatibility(result.compatibility);
     $('status').textContent = 'Proposed'; $('export').disabled = false;
     $('structure-info').textContent = `${plan.structure.atom_count} atoms · ${plan.structure.residue_count} residues · ${plan.structure.chains.length} chains`;
@@ -246,8 +254,9 @@ $('export').addEventListener('click', () => {
   const a = document.createElement('a'); a.href = url; a.download = `molvis-plan-${plan.id}.json`; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
-function parseStructure(text) {
+function parseStructure(text, psf = '') {
   const atoms = [];
+  let index = 0;
   let box = null;
   for (const line of text.split(/\r?\n/)) {
     const record = line.slice(0, 6).trim();
@@ -257,32 +266,74 @@ function parseStructure(text) {
       const angles = [33, 40, 47].map(start => Number(line.slice(start, start + 7)));
       if (lengths.every(length => length > 0) && angles.every(angle => angle === 90)) box = lengths;
     }
-    if (!['ATOM', 'HETATM'].includes(record) || line.length < 54) continue;
+    if (!['ATOM', 'HETATM'].includes(record)) continue;
+    const atomIndex = index++;
+    if (line.length < 54) continue;
     const name = line.slice(12, 16).trim();
     const element = line.slice(76, 78).trim().toUpperCase() || name.replace(/^\d+/, '')[0];
     const xyz = [30, 38, 46].map(start => Number(line.slice(start, start + 8)));
     if (!xyz.every(Number.isFinite)) continue;
-    atoms.push({name, record, element, xyz, chain:line.slice(21,22),
+    atoms.push({index:atomIndex, name, record, element, xyz, chain:line.slice(21,22),
       water:/^(HOH|WAT|TIP3|TIP4|SOL|SPC)$/.test(line.slice(17,21).trim())});
   }
-  return {atoms, box};
+  return {atoms, box, bonds:parseStructureBonds(psf, index)};
+}
+
+function parseStructureBonds(psf, atomCount) {
+  const section = /^[ \t]*(\d+)[ \t]+!NBOND\b/m.exec(psf);
+  if (!section) return [];
+  const count = Number(section[1]);
+  // Read the bond table up to the next PSF section, then consume its index pairs.
+  const table = psf.slice(section.index).split('\n').slice(1);
+  const indices = [];
+  for (const line of table) {
+    if (line.includes('!') || indices.length >= count * 2) break;
+    indices.push(...line.trim().split(/\s+/).filter(Boolean).map(Number));
+  }
+  const bonds = [];
+  for (let i = 0; i + 1 < Math.min(indices.length, count * 2); i += 2) {
+    const [a, b] = [indices[i], indices[i+1]];
+    if ([a,b].every(value => Number.isInteger(value) && value >= 1 && value <= atomCount)) bonds.push([a-1,b-1]);
+  }
+  return bonds;
+}
+
+async function loadProteinPreview(url, pair) {
+  if (!url) return;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return;
+    const structure = parseStructure(await response.text());
+    if (prepared !== pair) return;
+    proteinPreview = structure;
+    draw();
+  } catch {
+    // The original and prepared structures remain available.
+  }
 }
 
 async function loadStructurePreviews(urls, includePrepared, isCurrent) {
-  async function load(name) {
-    if (!urls[name]) return null;
-    const response = await fetch(urls[name]);
+  async function load(stem) {
+    if (!urls[stem + '.pdb']) return null;
+    const response = await fetch(urls[stem + '.pdb']);
     if (!response.ok) throw Error('Could not load the saved structure preview.');
-    return parseStructure(await response.text());
+    const pdbText = await response.text();
+    let psf = '';
+    if (urls[stem + '.psf']) {
+      const topology = await fetch(urls[stem + '.psf']).catch(() => null);
+      if (topology?.ok) psf = await topology.text();
+    }
+    return parseStructure(pdbText, psf);
   }
   try {
     const [starting, solvated] = await Promise.all([
-      includePrepared ? load('prepared.pdb') : null,
-      load('solvated.pdb')
+      includePrepared ? load('prepared') : null,
+      load('solvated')
     ]);
     if (!isCurrent()) return;
     if (includePrepared) savedPreview = starting;
     solvatedPreview = solvated;
+    if (solvated) $('structure-stage').value = 'solvated';
     draw();
   } catch (error) {
     if (isCurrent()) $('structure-preview-help').textContent = error.message;
@@ -290,26 +341,38 @@ async function loadStructurePreviews(urls, includePrepared, isCurrent) {
 }
 
 function draw() {
-  const view = $('structure-view');
-  view.options[2].disabled = !solvatedPreview?.box;
-  if (view.value === 'water' && view.options[2].disabled) view.value = 'trace';
-  const mode = view.value;
-  const source = mode === 'water' ? solvatedPreview : prepared?.preview || savedPreview || inputPreview;
+  const stages = {
+    source:inputPreview, protein:proteinPreview,
+    prepared:prepared?.preview || savedPreview, solvated:solvatedPreview
+  };
+  const selector = $('structure-stage');
+  for (const option of selector.options) option.disabled = !stages[option.value]?.atoms.length;
+  if (!stages[selector.value]?.atoms.length) {
+    selector.value = ['prepared','source','protein','solvated'].find(key => stages[key]?.atoms.length) || 'source';
+  }
+  const source = stages[selector.value];
+  const box = selector.value === 'solvated' ? source?.box : null;
+  const water = $('structure-water');
+  const hasWater = source?.atoms.some(atom => atom.water && atom.element === 'O');
+  water.disabled = !hasWater;
+  const mode = $('structure-view').value;
   const trace = mode === 'trace';
-  const atoms = (source?.atoms || []).filter(atom => trace
-    ? atom.record === 'ATOM' && atom.name === 'CA' && !atom.water
-    : !['H', 'D', 'T'].includes(atom.element) && (mode !== 'water' || !atom.water || atom.element === 'O'));
+  const atoms = (source?.atoms || []).filter(atom => {
+    if (atom.water) return water.checked && atom.element === 'O';
+    if (trace) return atom.record === 'ATOM' && atom.name === 'CA';
+    return mode === 'atoms' || !['H', 'D', 'T'].includes(atom.element);
+  });
   $('empty').hidden = atoms.length > 0;
   $('structure-info').textContent = atoms.length
-    ? `${atoms.length.toLocaleString()} ${trace ? 'Cα atoms' : 'atoms shown'}` : 'No structure loaded';
-  $('structure-preview-help').textContent = mode === 'water'
-    ? 'Prepared solute and water oxygens inside the periodic box.'
-    : 'Inspect the input or prepared structure. Build a periodic water box to enable the solvent view.';
-  paintStructure(canvas, atoms, {trace, box:mode === 'water' ? source.box : null,
-    referenceAtoms:mode === 'water' ? source.atoms : atoms, yaw, pitch, zoom});
+    ? `${atoms.length.toLocaleString()} ${trace && !(hasWater && water.checked) ? 'Cα atoms' : 'atoms shown'}` : 'No structure loaded';
+  $('structure-preview-help').textContent = box
+    ? `Periodic box · ${box.map(length => (length / 10).toFixed(3)).join(' × ')} nm`
+    : 'Choose a PDB or prepare the protein to make more structures available.';
+  paintStructure(canvas, atoms, {trace, box, bonds:source?.bonds || [],
+    referenceAtoms:box ? source.atoms : atoms, yaw, pitch, zoom});
 }
 
-function paintStructure(target, atoms, {trace, box=null, referenceAtoms=atoms, yaw=0, pitch=0, zoom=1}) {
+function paintStructure(target, atoms, {trace, box=null, bonds=[], referenceAtoms=atoms, yaw=0, pitch=0, zoom=1}) {
   const rect = target.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
   target.width = rect.width * ratio; target.height = rect.height * ratio;
@@ -333,25 +396,38 @@ function paintStructure(target, atoms, {trace, box=null, referenceAtoms=atoms, y
     const vertices = Array.from({length:8}, (_,index) =>
       project(box.map((length,axis) => length * ((index & (1<<axis)) ? .5 : -.5))));
     ctx.strokeStyle = '#698494'; ctx.lineWidth = 1;
+    ctx.setLineDash([5,4]);
     ctx.beginPath();
     for (let i=0;i<8;i++) for (const bit of [1,2,4]) {
       if (i & bit) continue;
       ctx.moveTo(...vertices[i]); ctx.lineTo(...vertices[i|bit]);
     }
     ctx.stroke();
+    ctx.setLineDash([]);
   }
   const chains = [...new Set(atoms.map(atom => atom.chain))];
   const points = atoms.map(atom => project(atom.xyz.map((value,k) => value-center[k])));
   const elementColors = {N:'#3566ad', O:'#bd5151', S:'#a27c28', P:'#a45a32'};
-  const indices = atoms.map((_,i) => i);
-  if (box) indices.sort((a,b) => Number(atoms[b].water)-Number(atoms[a].water));
+  const indices = atoms.map((_,i) => i).sort((a,b) => Number(atoms[b].water)-Number(atoms[a].water));
+  if (!trace) {
+    const visible = new Map(atoms.map((atom, i) => [atom.index, i]).filter(([,i]) => !atoms[i].water));
+    ctx.strokeStyle = '#a8b4aa';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const [a,b] of bonds) {
+      if (!visible.has(a) || !visible.has(b)) continue;
+      ctx.moveTo(...points[visible.get(a)]);
+      ctx.lineTo(...points[visible.get(b)]);
+    }
+    ctx.stroke();
+  }
   for (const i of indices) {
     const atom = atoms[i];
     const chainColor = colors[chains.indexOf(atom.chain)%colors.length];
-    ctx.strokeStyle = ctx.fillStyle = trace ? chainColor
-      : atom.water ? '#75a6c082' : elementColors[atom.element] || chainColor;
+    ctx.strokeStyle = ctx.fillStyle = atom.water ? '#75a6c082'
+      : trace ? chainColor : elementColors[atom.element] || (atom.element === 'H' ? '#b4bdb4' : chainColor);
     ctx.lineWidth=2.5; ctx.lineCap='round';
-    if (trace && i && atoms[i-1].chain===atom.chain &&
+    if (trace && i && !atom.water && !atoms[i-1].water && atoms[i-1].chain===atom.chain &&
         Math.hypot(...atom.xyz.map((value,k) => value-atoms[i-1].xyz[k]))<4.5) {
       ctx.beginPath(); ctx.moveTo(...points[i-1]); ctx.lineTo(...points[i]); ctx.stroke();
     }
@@ -359,11 +435,14 @@ function paintStructure(target, atoms, {trace, box=null, referenceAtoms=atoms, y
   }
 }
 
-$('structure-view').addEventListener('change', () => {
-  yaw = pitch = $('structure-view').value === 'water' ? .35 : 0;
+function resetStructureCamera() {
+  yaw = .45;
+  pitch = .25;
   zoom = 1;
   draw();
-});
+}
+for (const id of structureControls) $(id).addEventListener('change', draw);
+$('reset-structure-view').addEventListener('click', resetStructureCamera);
 canvas.onpointerdown = e => {dragging=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId);};
 canvas.onpointermove = e => {if(!dragging)return; yaw+=(e.clientX-dragging[0])*.01;pitch+=(e.clientY-dragging[1])*.01;dragging=[e.clientX,e.clientY];draw();};
 canvas.onpointerup = canvas.onpointercancel = () => dragging=null;

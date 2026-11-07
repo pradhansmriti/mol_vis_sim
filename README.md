@@ -106,7 +106,7 @@ node tests/test_display_refresh.cjs
 
 ### Live measurements
 
-**2. Structures** previews the starting coordinates as a Cα trace or as all atoms except hydrogen. Build the periodic water box to see the prepared solute, water oxygens, and box outline.
+**2. Structures** uses the same controls as the recorded demo. Select an available starting structure: original PDB, protein selection, prepared PSF/PDB, or periodic water box. Choose a Cα trace, protein atoms, or all atoms except hydrogen. Toggle water oxygens independently and use **Reset view** to restore the camera.
 
 After preparation and solvent selection, **Run + plot NVT** starts an OpenMM worker in the background. The **4. Simulation output** panel updates while it runs: minimization potential energy versus optimizer report number, then measured temperature and potential/kinetic/total energy versus simulation time. Dynamics are sampled at the selected step intervals (default 10 steps, or 0.02 ps at 2 fs); the target temperature is a dashed reference line. Temperature is not reported during minimization. Hover over points or use the latest-values table to inspect readings.
 
