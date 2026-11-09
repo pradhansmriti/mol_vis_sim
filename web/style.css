@@ -34,3 +34,23 @@
 .structure-toolbar label:has(input) {
   align-self: center;
 }
+.guide-steps, .guide-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.guide-steps { margin-bottom: 16px; }
+.guide-steps button[aria-current="step"] { border-color: var(--accent); background: #e8f0e8; color: var(--accent); font-weight: 650; }
+.guide-card { padding: 18px 24px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.guide-card h2 { font-size: 20px; }
+.guide-card p { margin: 6px 0 12px; }
+.guide-card details { margin-bottom: 12px; }
+.guide-card a, #open-guide { color: var(--accent); }
+#guide-status { margin: 8px 0; }
+#guide-status:empty { display: none; }
+body[data-guide-step] .activity,
+body[data-guide-step] #review,
+body[data-guide-step]:not([data-guide-step="2"]) #plan-form,
+body[data-guide-step]:not([data-guide-step="4"]) #live-monitor,
+body[data-guide-step="2"] #plan-form > :not(.workspace),
+body[data-guide-step="2"] .workspace > aside,
+body[data-guide-step="4"] #display-frequency,
+body[data-guide-step="4"] #resume-controls { display: none; }
+body[data-guide-step="2"] #plan-form { margin-top: 12px; }
+body[data-guide-step="2"] .workspace { grid-template-columns: minmax(0, 1fr); }

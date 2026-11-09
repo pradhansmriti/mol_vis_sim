@@ -15,6 +15,29 @@ from .environment_storage import DOWNLOADS, environment_root
 from .live_runs import start_run, resume_run, read_run, cancel_run, shutdown
 
 WEB = Path(__file__).resolve().parent.parent / 'web'
+EXAMPLE_SETTINGS = dict(solvent_model='obc2', salt_molar=0.2, temperature_k=300,
+                        timestep_fs=2, dynamics_steps=100)
+
+
+def example_input():
+    directory = os.environ.get('MOLVIS_EXAMPLE_DIR')
+    if not directory:
+        raise ValueError('The ubiquitin example is not configured. Start the server with --example-dir pointing to the prepared files; see the README guided example setup.')
+    folder = Path(directory).expanduser()
+    parameters = folder / 'par_all36m_prot.prm'
+    try:
+        def read_file(path):
+            with path.open('rb') as file:
+                content = file.read(5_000_001)
+            if len(content) > 5_000_000:
+                raise ValueError('A configured ubiquitin example file exceeds 5 MB.')
+            return content.decode('utf-8')
+
+        return dict(pdb=read_file(folder / 'prepared.pdb'), psf=read_file(folder / 'prepared.psf'),
+                    parameters=[dict(name=parameters.name, text=read_file(parameters))],
+                    settings=EXAMPLE_SETTINGS)
+    except (OSError, UnicodeError) as exc:
+        raise ValueError('The example folder must contain readable prepared.pdb, prepared.psf, and par_all36m_prot.prm files. See the README guided example setup.') from exc
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -30,6 +53,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
     def do_GET(self):
+        if self.path == '/api/example':
+            try:
+                pair = example_input()
+                result = dict(pdb=pair['pdb'], psf=pair['psf'], settings=pair['settings'])
+                self.reply(200, json.dumps(result).encode(), 'application/json')
+            except ValueError as exc:
+                self.reply(404, json.dumps({'error': str(exc)}).encode(), 'application/json')
+            return
         live=re.fullmatch(r'/api/runs/([0-9a-f-]{36})(/measurements\.(?:jsonl|csv))?',self.path)
         if live:
             try: record=read_run(live[1])
@@ -90,7 +121,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         cancel=re.fullmatch(r'/api/runs/([0-9a-f-]{36})/cancel',self.path)
         resume=re.fullmatch(r'/api/runs/([0-9a-f-]{36})/resume',self.path)
-        if self.path not in ('/api/plan', '/api/prepare', '/api/compatibility','/api/readiness','/api/runs') and not (cancel or resume):
+        if self.path not in ('/api/plan', '/api/prepare', '/api/compatibility','/api/readiness','/api/runs','/api/example/run') and not (cancel or resume):
             self.reply(404, b'Not found', 'text/plain')
             return
         # Reject cross-site browser requests to this local service.
@@ -112,9 +143,11 @@ class Handler(BaseHTTPRequestHandler):
                 result = resume_run(resume[1], payload)
             elif cancel:
                 result = cancel_run(cancel[1])
+            elif self.path == '/api/example/run':
+                result = start_run(example_input())
             else:
                 result = actions[self.path](payload)
-            self.reply(202 if resume or self.path=='/api/runs' else 200, json.dumps(result, allow_nan=False).encode(), 'application/json')
+            self.reply(202 if resume or self.path in ('/api/runs','/api/example/run') else 200, json.dumps(result, allow_nan=False).encode(), 'application/json')
         except (ValueError, TypeError, UnicodeError) as exc:
             self.reply(400, json.dumps({'error': str(exc)}).encode(), 'application/json')
 
@@ -125,9 +158,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--psfgen', help='Path to a standalone psfgen 2.x executable; overrides MOLVIS_PSFGEN.')
+    parser.add_argument('--example-dir', help='Folder with the prepared ubiquitin pair and local CHARMM36m parameters.')
     args = parser.parse_args()
     if args.psfgen:
         os.environ['MOLVIS_PSFGEN'] = args.psfgen
+    if args.example_dir:
+        os.environ['MOLVIS_EXAMPLE_DIR'] = args.example_dir
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Workspace: http://127.0.0.1:{server.server_port}', flush=True)
     try:

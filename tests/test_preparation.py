@@ -124,8 +124,11 @@ class PairTests(StorageIsolation, unittest.TestCase):
             kwargs['stdout'].flush()
             return subprocess.CompletedProcess(args[0],0)
         with patch('molvis.preparation.subprocess.run',side_effect=failed_engine):
-            with self.assertRaisesRegex(ValueError,'engine error'):
+            with self.assertRaises(ValueError) as error:
                 prepare(generation_payload())
+            self.assertIn('--psfgen /path/to/psfgen', str(error.exception))
+            self.assertIn('Engine details:', str(error.exception))
+            self.assertIn('Failed to parse autogenerate statement', str(error.exception))
     def test_protein_selection_excludes_water_ions_and_ligands_keeps_hydrogens(self):
         hydrogen = pdb_atom(5,'HN',(0,1,0))
         water = pdb_atom(6,'O',(6,0,0),residue=101).replace('ALA','HOH').replace('ATOM  ','HETATM')
@@ -206,7 +209,7 @@ class PairTests(StorageIsolation, unittest.TestCase):
 
     def test_runner_failure_and_timeout_surface_as_errors(self):
         with patch('molvis.preparation.subprocess.run', return_value=subprocess.CompletedProcess([],1)):
-            with self.assertRaisesRegex(ValueError,'preparation failed'):
+            with self.assertRaisesRegex(ValueError,'could not prepare the structure'):
                 prepare(generation_payload())
         with patch('molvis.preparation.subprocess.run', side_effect=subprocess.TimeoutExpired([],120)):
             with self.assertRaisesRegex(ValueError,'120 seconds'):

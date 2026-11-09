@@ -39,3 +39,20 @@ assert.equal(displayedTimestep,.1);assert.equal(legend.textContent,'Output inter
 context.showRunOutputIntervals({status:'completed',settings:{timestep_fs:.1}});
 assert.equal(displayedTimestep,2);assert.equal(legend.textContent,'Output intervals · next run');
 console.log('Reconnect restores frozen intervals and simulated-time spacing.');
+
+// A root refresh reconnects, while the explicit guide link remains usable.
+const routeStart=source.indexOf('const route = new URLSearchParams(location.search);');
+const routeEnd=source.indexOf('\nfunction startGuide()',routeStart);
+function initialRoute(search, stored) {
+  let monitored=null, guided=false;
+  const link={hidden:true};
+  const ctx=vm.createContext({URLSearchParams,location:{search},localStorage:{getItem:()=>stored},
+    $:()=>link,startRunMonitor:id=>monitored=id,startGuide:()=>guided=true});
+  vm.runInContext(source.slice(routeStart,routeEnd),ctx);
+  return {monitored,guided,linkVisible:!link.hidden};
+}
+assert.deepEqual(initialRoute('', 'saved-id'),{monitored:'saved-id',guided:false,linkVisible:true});
+assert.deepEqual(initialRoute('?guide=1', 'saved-id'),{monitored:null,guided:true,linkVisible:false});
+assert.deepEqual(initialRoute('', null),{monitored:null,guided:true,linkVisible:false});
+assert.deepEqual(initialRoute('?run=explicit', 'saved-id'),{monitored:'explicit',guided:false,linkVisible:true});
+console.log('Root refresh reconnects and the guide can still be opened.');

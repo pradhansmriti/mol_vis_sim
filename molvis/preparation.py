@@ -284,10 +284,17 @@ def prepare(payload):
         log = (work / 'psfgen.log').read_text(errors='replace')[-100_000:]
         if (work / 'engine-output.log').exists():
             log += (work / 'engine-output.log').read_text(errors='replace')[-100_000:]
-        if process.returncode:
-            raise ValueError(f'Standalone psfgen preparation failed (exit {process.returncode}). '+log[-6000:])
-        if re.search(r'(?im)^\s*(?:psfgen\)\s*)?(?:ERROR\b|FATAL\b|MOLVIS_PSFGEN_ERROR:)', log):
-            raise ValueError('psfgen reported an engine error even though the process exited successfully. '+log[-6000:])
+        engine_error = re.search(r'(?im)^\s*(?:psfgen\)\s*)?(?:ERROR\b|FATAL\b|MOLVIS_PSFGEN_ERROR:)', log)
+        if process.returncode or engine_error:
+            if re.search(r'failed to parse autogenerate statement', log, re.I):
+                message = ('psfgen could not read the topology’s AUTO statement. This can occur with the Python psfgen backend and CHARMM36 topology files. '
+                           'Restart the server using a compatible standalone psfgen 2.x executable with --psfgen /path/to/psfgen, then retry preparation. '
+                           'Keep the topology file unchanged. If the standalone executable also fails, check that the topology and psfgen versions are compatible.')
+            elif 'No module named \'psfgen\'' in log:
+                message = ('The preparation Python environment does not have psfgen installed. Install the preparation dependencies or restart the server with --psfgen /path/to/psfgen to use a standalone executable.')
+            else:
+                message = ('psfgen could not prepare the structure. Check the engine details for the first error and verify that the structure, topology files, and preparation settings are compatible.')
+            raise ValueError(message + '\n\nEngine details:\n' + log[-6000:])
         if executable:
             write_engine_record(work, executable)
         for name in ('prepared.pdb', 'prepared.psf'):

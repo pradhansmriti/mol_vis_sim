@@ -85,6 +85,20 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(self.request('GET', path)[0], 200)
         self.assertEqual(self.request('GET', '/../README.md')[0], 404)
 
+    def test_guided_example_configuration(self):
+        with TemporaryDirectory() as folder, patch.dict(os.environ, {'MOLVIS_EXAMPLE_DIR': folder}):
+            status, data = self.request('GET', '/api/example')
+            self.assertEqual(status, 404)
+            self.assertIn('prepared.pdb', json.loads(data)['error'])
+            for name, content in [('prepared.pdb', PDB), ('prepared.psf', PSF), ('par_all36m_prot.prm', '* test')]:
+                (Path(folder) / name).write_text(content)
+            status, data = self.request('GET', '/api/example')
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(data)['pdb'], PDB)
+            with patch('molvis.__main__.start_run', return_value={'id': 'example'}) as start:
+                self.assertEqual(self.request('POST', '/api/example/run', '{}')[0], 202)
+                self.assertEqual(start.call_args.args[0]['parameters'][0]['text'], '* test')
+
     def test_plan_endpoint_and_invalid_json(self):
         status, data = self.request('POST', '/api/plan', json.dumps({'pdb': atom()}))
         self.assertEqual(status, 200)

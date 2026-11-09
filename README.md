@@ -34,6 +34,16 @@ python3 -m molvis
 
 Open http://127.0.0.1:8765. Prepare the files using one of the two routes below, then edit the settings and select **Propose workflow**. The viewer projects actual Cα coordinates and supports drag rotation and scroll zoom. Export saves the proposed configuration, file hashes, prepared PDB/PSF text, steps, and preparation record as JSON.
 
+### Guided ubiquitin example setup
+
+The guided example requires local files and must be configured before starting the server. Prepare a ubiquitin structure using the workspace preparation route below (or use an existing matching prepared pair), and place its `prepared.pdb`, `prepared.psf`, and matching CHARMM36m protein parameter file `par_all36m_prot.prm` together in a folder. Supply the parameter file from your local CHARMM distribution; these files are not bundled. Install the simulation dependencies described in the local OpenMM diagnostic below, then start the server with:
+
+```sh
+python3 -m molvis --example-dir /path/to/example-folder
+```
+
+Alternatively set `MOLVIS_EXAMPLE_DIR` to that folder before running `python3 -m molvis`. Open the root URL and choose **Try an example**. Without this configuration, choose **Use your own structure** to work in the full workspace.
+
 ## Prepare files before planning
 
 **Starting topology: CHARMM36 protein file `top_all36_prot.rtf`.** Select your local copy in the topology uploader. Our local distribution pairs it with the CHARMM36m protein parameters `par_all36m_prot.prm`. Files are supplied by the user, not bundled or downloaded automatically; other compatible topologies can still be selected.

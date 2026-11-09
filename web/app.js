@@ -5,6 +5,7 @@ let liveRunning = false, activeRun = null;
 
 const canvas = $('structure');
 let inputPreview = null, proteinPreview = null, savedPreview = null, solvatedPreview = null;
+let examplePreview = null;
 const structureControls = new Set(['structure-stage', 'structure-view', 'structure-water']);
 const colors = ['#26785b','#d09843','#5188a3','#9c6d9c'];
 function invalidate() {
@@ -54,6 +55,7 @@ async function readFiles(id) {
 }
 $('prepare').addEventListener('click', async () => {
   $('error').textContent = ''; prepared = null; invalidate();
+  $('prep-error').hidden = true;
   $('prep-downloads').hidden = true;
   $('prep-location').hidden = true;
   const submittedRevision = revision, mode = $('prep-mode').value;
@@ -101,7 +103,15 @@ $('prepare').addEventListener('click', async () => {
     }
     $('record').textContent = JSON.stringify(result.manifest,null,2); draw();
   } catch(error) {
-    if (submittedRevision === revision) { $('error').textContent = error.message; $('prep-status').textContent = 'Preparation needs attention.'; }
+    if (submittedRevision === revision) {
+      const [message, ...details] = error.message.split('\n\nEngine details:\n');
+      $('prep-error-message').textContent = message;
+      $('prep-error-log').textContent = details.join('\n\nEngine details:\n');
+      $('prep-error-details').hidden = !details.length;
+      $('prep-error-details').open = false;
+      $('prep-error').hidden = false;
+      $('prep-status').textContent = 'Preparation needs attention.';
+    }
   } finally { preparing = false; $('prepare').disabled = false; $('propose').disabled = !prepared; refreshEnvironmentButtons(); }
 });
 
@@ -112,6 +122,15 @@ function refreshEnvironmentButtons() {
   $('check-compatibility').disabled = disabled;
   $('test-readiness').disabled = disabled;
   $('propose').disabled = !prepared || preparing || checking || liveRunning;
+  if (preparing) $('workflow-blocker').textContent = 'Preparing the structure. Wait for preparation to finish.';
+  else if (checking) $('workflow-blocker').textContent = 'Checking the simulation setup. Wait for the check to finish.';
+  else if (liveRunning) $('workflow-blocker').textContent = 'A readiness run is in progress. Follow its output above or use Stop run.';
+  else if (!prepared) $('workflow-blocker').textContent = 'Prepare a PSF/PDB pair in step 1. If preparation failed, see the explanation beside the preparation button.';
+  else if (!$('parameters').files.length && $('solvent-model').value === 'charmm_tip3p' && !$('water-files').files.length) $('workflow-blocker').textContent = 'Explicit water needs two files: select matching protein parameters in step 1 and prepare the pair again; also select toppar_water_ions.str under CHARMM water definitions.';
+  else if (!$('parameters').files.length) $('workflow-blocker').textContent = 'To run an OpenMM check, select matching protein parameter files in step 1 (for CHARMM36m, par_all36m_prot.prm), then prepare the pair again. You can still propose a workflow.';
+  else if ($('solvent-model').value === 'deferred') $('workflow-blocker').textContent = 'To run an OpenMM check, choose a solvent in the solvation settings. You can still propose a workflow.';
+  else if ($('solvent-model').value === 'charmm_tip3p' && !$('water-files').files.length) $('workflow-blocker').textContent = 'Select toppar_water_ions.str under CHARMM water definitions, then retry the OpenMM check.';
+  else $('workflow-blocker').textContent = 'Inputs are ready for an OpenMM compatibility check or a short readiness run.';
 }
 
 function outputIntervals() {
@@ -133,6 +152,7 @@ function showCompatibility(result) {
     (result.readiness ? `\nReadiness test passed: ${result.readiness.dynamics_steps} steps (${result.readiness.duration_ps} ps); finite energy, forces and coordinates. This is not production validation.` : '') +
     (result.box ? `\nNet charge: ${result.net_charge_e.toFixed(4)} e (unchanged).` : '') +
     '\nProtonation is not validated by this check. Simulation readiness still requires review.';
+  $('workflow-blocker').textContent = `${labels[result.status] || result.status}: ${result.message}${result.required ? ' ' + result.required.join(' ') : ''}`;
   const downloads = $('environment-downloads'); downloads.replaceChildren();
   if (result.storage) {
     for (const [name,url] of Object.entries(result.storage.download_urls)) {
@@ -159,6 +179,7 @@ $('solvent-model').addEventListener('change', () => {
 async function runEnvironmentCheck(readiness=false) {
   if (!prepared || preparing || checking) return;
   const submittedRevision = revision, pair = prepared, settings = environmentSettings();
+  let checkStatus = null;
   checking = true; refreshEnvironmentButtons();
   $('environment-downloads').hidden=true;
   $('compatibility-status').textContent = readiness ? 'Building the selected environment and running the requested bounded NVT test…' : 'Building/checking the selected environment in OpenMM…';
@@ -176,9 +197,16 @@ async function runEnvironmentCheck(readiness=false) {
     }
     if (revision !== submittedRevision) return;
     showCompatibility(result);
+    checkStatus = $('workflow-blocker').textContent;
   } catch(error) {
-    if (revision === submittedRevision) $('compatibility-status').textContent = error.message;
-  } finally { checking = false; refreshEnvironmentButtons(); }
+    if (revision === submittedRevision) {
+      $('compatibility-status').textContent = error.message;
+      checkStatus = `OpenMM check could not start: ${error.message}`;
+    }
+  } finally {
+    checking = false; refreshEnvironmentButtons();
+    if (checkStatus && revision === submittedRevision) $('workflow-blocker').textContent = checkStatus;
+  }
 }
 $('check-compatibility').addEventListener('click',()=>runEnvironmentCheck(false));
 $('test-readiness').addEventListener('click',()=>runEnvironmentCheck(true));
@@ -341,7 +369,7 @@ async function loadStructurePreviews(urls, includePrepared, isCurrent) {
 }
 
 function draw() {
-  const stages = {
+  const stages = examplePreview ? {prepared:examplePreview} : {
     source:inputPreview, protein:proteinPreview,
     prepared:prepared?.preview || savedPreview, solvated:solvatedPreview
   };
@@ -367,7 +395,8 @@ function draw() {
     ? `${atoms.length.toLocaleString()} ${trace && !(hasWater && water.checked) ? 'Cα atoms' : 'atoms shown'}` : 'No structure loaded';
   $('structure-preview-help').textContent = box
     ? `Periodic box · ${box.map(length => (length / 10).toFixed(3)).join(' × ')} nm`
-    : 'Choose a PDB or prepare the protein to make more structures available.';
+    : examplePreview ? 'Prepared ubiquitin · switch the protein view to inspect more atoms.'
+      : 'Choose a PDB or prepare the protein to make more structures available.';
   paintStructure(canvas, atoms, {trace, box, bonds:source?.bonds || [],
     referenceAtoms:box ? source.atoms : atoms, yaw, pitch, zoom});
 }
@@ -590,6 +619,7 @@ async function startRunMonitor(identifier, submittedRevision=null) {
       if (!liveRunning) {
         if(record.result) {
           $('run-status').textContent+=` · ${record.result.message}`;
+          $('workflow-blocker').textContent = `Run ${record.status}: ${record.result.message}`;
           if(monitor.revision!==null && monitor.revision===revision) showCompatibility(record.result);
           if (monitor.revision===null && !prepared && !$('pdb').files.length && record.result.storage) {
             loadStructurePreviews(record.result.storage.download_urls, true,
@@ -637,6 +667,93 @@ $('stop-run').addEventListener('click',async()=>{
   } catch(error) {$('run-status').textContent=error.message;$('stop-run').disabled=false;}
 });
 renderMeasurements({samples:[],settings:{temperature_k:300}});
-let savedRun=new URLSearchParams(location.search).get('run');
-try {savedRun=savedRun || localStorage.getItem('molvis-live-run');} catch {}
-if (savedRun) startRunMonitor(savedRun);
+const route = new URLSearchParams(location.search);
+let savedRun = route.get('run');
+try {savedRun = savedRun || localStorage.getItem('molvis-live-run');} catch {}
+if (route.has('workspace') || route.has('run') || (savedRun && !route.has('guide'))) {
+  $('open-guide').hidden = false;
+  if (savedRun) startRunMonitor(savedRun);
+} else {
+  startGuide();
+}
+
+function startGuide() {
+  const guide = $('guided-example');
+  const steps = [...guide.querySelectorAll('[data-guide-step]')];
+  const panels = [...guide.querySelectorAll('[data-guide-panel]')];
+  const status = $('guide-status');
+  const load = $('load-example');
+  const run = $('example-run');
+  let reached = 1;
+
+  function showStep(step, focus = true) {
+    reached = Math.max(reached, step);
+    document.body.dataset.guideStep = String(step);
+    for (const [index, button] of steps.entries()) {
+      button.disabled = index + 1 > reached;
+      if (index + 1 === step) button.setAttribute('aria-current', 'step');
+      else button.removeAttribute('aria-current');
+      panels[index].hidden = index + 1 !== step;
+    }
+    if (step === 2) draw();
+    if (focus) steps[step - 1].focus();
+  }
+
+  steps.forEach((button, index) => button.addEventListener('click', () => showStep(index + 1)));
+  guide.hidden = false;
+  showStep(1, false);
+
+  load.addEventListener('click', async () => {
+    if (examplePreview) {
+      showStep(2);
+      return;
+    }
+    load.disabled = true;
+    status.textContent = 'Loading ubiquitin…';
+    try {
+      const response = await fetch('/api/example');
+      const data = await response.json();
+      if (!response.ok) throw Error(data.error || 'The example could not be loaded.');
+      const preview = parseStructure(data.pdb, data.psf);
+      if (!preview.atoms.length) throw Error('The example structure has no readable atoms.');
+      const {salt_molar, temperature_k, timestep_fs, dynamics_steps} = data.settings;
+      const duration = dynamics_steps * timestep_fs / 1000;
+      $('example-settings').textContent = `CHARMM36m · OBC2 implicit solvent · ${salt_molar} M ionic screening · ${temperature_k} K · ${timestep_fs} fs per step.`;
+      run.textContent = `Run ${duration} ps test`;
+      examplePreview = preview;
+      showStep(2);
+      resetStructureCamera();
+      status.textContent = '';
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      load.disabled = false;
+    }
+  });
+
+  $('example-continue').addEventListener('click', () => showStep(3));
+  run.addEventListener('click', async () => {
+    if (reached === 4) {
+      showStep(4);
+      return;
+    }
+    run.disabled = true;
+    status.textContent = 'Starting OpenMM…';
+    try {
+      const response = await fetch('/api/example/run', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
+      });
+      const result = await response.json();
+      if (!response.ok) throw Error(result.error || 'The test could not start.');
+      $('example-workspace').href = `/?run=${encodeURIComponent(result.id)}`;
+      status.textContent = '';
+      run.textContent = 'See results';
+      showStep(4);
+      startRunMonitor(result.id);
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      run.disabled = false;
+    }
+  });
+}

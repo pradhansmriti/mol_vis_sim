@@ -114,14 +114,15 @@ def check_compatibility(payload, observer=None, cancel_event=None, work_director
     if settings['solvent_model'] == 'deferred':
         result.update(status='deferred', message='Solvation and salt will be chosen after protein preparation and structure review. No solvent compatibility check has run.')
         return result
-    if settings['solvent_model'] == 'charmm_tip3p' and not water:
-        result.update(status='needs_input', message='Upload toppar_water_ions.str (CHARMM TIP3 water topology/parameters) to build the periodic water box. No ions will be added.',
-                      required=['Supply the local CHARMM water stream file as well as matching protein parameters.'])
-        return result
     if settings['solvent_model'] == 'vacuum' and settings['salt_molar']:
         raise ValueError('Vacuum cannot have a salt concentration. Set salt to 0 M or select solvent.')
+    missing = []
     if not parameters:
-        result['message'] = 'Upload matching CHARMM parameter files to test this PSF/PDB and solvent in OpenMM.'
+        missing.append('Protein parameters: in step 1, select matching CHARMM parameter files (for CHARMM36m, par_all36m_prot.prm), then prepare the pair again.')
+    if settings['solvent_model'] == 'charmm_tip3p' and not water:
+        missing.append('Water definitions: select toppar_water_ions.str under CHARMM water definitions in the solvation settings.')
+    if missing:
+        result.update(status='needs_input', message='The OpenMM check needs the following files:', required=missing)
         return result
     if pair['atom_count'] > 20000:
         raise ValueError('Interactive compatibility checks are limited to 20000 atoms. Validate larger systems offline.')

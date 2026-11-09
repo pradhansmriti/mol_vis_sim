@@ -37,6 +37,15 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(result['status'], 'needs_input')
         self.assertEqual(result['settings']['nonbonded_method'], 'PME')
         self.assertTrue(result['required'])
+        self.assertIn('par_all36m_prot.prm', ' '.join(result['required']))
+        self.assertIn('toppar_water_ions.str', ' '.join(result['required']))
+
+    def test_explicit_solvent_reports_only_missing_protein_parameters(self):
+        result = check_compatibility(dict(pdb=PDB, psf=PSF, settings=dict(solvent_model='charmm_tip3p'),
+                                          water=[dict(name='toppar_water_ions.str', text='* water')]))
+        self.assertEqual(result['status'], 'needs_input')
+        self.assertEqual(len(result['required']), 1)
+        self.assertIn('Protein parameters', result['required'][0])
 
     def test_implicit_default_screening_and_explicit_no_ions(self):
         for model in ('obc2','gbn2'):
