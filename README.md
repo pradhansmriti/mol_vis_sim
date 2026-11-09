@@ -10,7 +10,34 @@ Starting ubiquitin structure in its periodic water box, with simulation output f
 
 ## Run locally
 
-Requires Python 3.10 or newer. Existing PSF/PDB uploads and planning use the standard library. Generation uses the standalone Python `psfgen` library in the backend; VMD and Tcl are not required.
+Requires Python 3.10 or newer. Existing PSF/PDB uploads and planning use the standard library. The following steps set up the local workspace and bounded OpenMM tests; the application runs on your computer.
+
+1. Clone the repository and enter its folder:
+
+   ```sh
+   git clone https://github.com/pradhansmriti/mol_vis_sim.git
+   cd mol_vis_sim
+   ```
+
+2. Install OpenMM into the environment used by simulation checks:
+
+   ```sh
+   python3 -m venv .venv
+   .venv/bin/python -m pip install -r requirements-simulation.txt
+   ```
+
+3. For generating structures, obtain a standalone psfgen 2.x executable from the official NAMD package and note its path. You will also need a protein PDB and matching local CHARMM topology and parameter files; the workspace does not bundle these files. An existing matched PDB/PSF pair can be uploaded without psfgen.
+
+4. Check the setup and start the server, replacing the example path with your executable's path:
+
+   ```sh
+   python3 -m molvis --psfgen /path/to/psfgen --check-setup
+   python3 -m molvis --psfgen /path/to/psfgen
+   ```
+
+   Open http://127.0.0.1:8765 and select **Use your own structure**. To run a readiness test, provide the matching parameter file as well as the PDB/PSF pair. The setup check reports optional components separately; “Available” does not guarantee that a particular structure or force field is compatible. Stop the server with Ctrl+C.
+
+To use **Try an example**, configure a prepared ubiquitin pair as described below and add `--example-dir /path/to/example-folder` to both commands. If you only want to upload and plan an existing pair, `python3 -m molvis` also starts the workspace without psfgen or OpenMM.
 
 An official standalone psfgen 2.x executable can be selected instead of the legacy Python library:
 
@@ -26,7 +53,7 @@ The official NAMD 3.0.3 Mac package's psfgen 2.0 executable was verified with ou
 python3 -m molvis --port 8766 --psfgen "$HOME/Downloads/NAMD_3.0.3_MacOS-universal-multicore/psfgen"
 ```
 
-The complete 30-test suite passes with this executable and with the legacy library backend. The official executable removes the AUTO/PATCH parser diagnostic for the supplied CHARMM36 topology. CTER terminal O/OXT naming is now handled by the mapping described below; passing preparation tests does not imply simulation readiness.
+The official executable removes the AUTO/PATCH parser diagnostic observed with the Python backend and supplied CHARMM36 topology. CTER terminal O/OXT naming is handled by the mapping described below; passing preparation tests does not imply simulation readiness.
 
 ```sh
 python3 -m molvis
@@ -39,7 +66,8 @@ Open http://127.0.0.1:8765. Prepare the files using one of the two routes below,
 The guided example requires local files and must be configured before starting the server. Prepare a ubiquitin structure using the workspace preparation route below (or use an existing matching prepared pair), and place its `prepared.pdb`, `prepared.psf`, and matching CHARMM36m protein parameter file `par_all36m_prot.prm` together in a folder. Supply the parameter file from your local CHARMM distribution; these files are not bundled. Install the simulation dependencies described in the local OpenMM diagnostic below, then start the server with:
 
 ```sh
-python3 -m molvis --example-dir /path/to/example-folder
+python3 -m molvis --psfgen /path/to/psfgen --example-dir /path/to/example-folder --check-setup
+python3 -m molvis --psfgen /path/to/psfgen --example-dir /path/to/example-folder
 ```
 
 Alternatively set `MOLVIS_EXAMPLE_DIR` to that folder before running `python3 -m molvis`. Open the root URL and choose **Try an example**. Without this configuration, choose **Use your own structure** to work in the full workspace.

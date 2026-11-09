@@ -159,11 +159,17 @@ def main():
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--psfgen', help='Path to a standalone psfgen 2.x executable; overrides MOLVIS_PSFGEN.')
     parser.add_argument('--example-dir', help='Folder with the prepared ubiquitin pair and local CHARMM36m parameters.')
+    parser.add_argument('--check-setup', action='store_true', help='Check local preparation, OpenMM and example configuration without starting the server.')
     args = parser.parse_args()
     if args.psfgen:
         os.environ['MOLVIS_PSFGEN'] = args.psfgen
     if args.example_dir:
         os.environ['MOLVIS_EXAMPLE_DIR'] = args.example_dir
+    if args.check_setup:
+        from .setup_check import setup_report
+        for name, status, message in setup_report(example_input):
+            print(f'{name}: {status} — {message}')
+        return
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Workspace: http://127.0.0.1:{server.server_port}', flush=True)
     try:
