@@ -1,6 +1,7 @@
 # Protein simulation workspace
 
 The agreed product design, specification, and interactive preview are in [outputs/README.md](outputs/README.md).
+Planned work is tracked in [TODO.md](TODO.md).
 
 ## Preview
 
