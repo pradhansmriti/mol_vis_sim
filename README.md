@@ -3,6 +3,10 @@
 The agreed product design, specification, and interactive preview are in [outputs/README.md](outputs/README.md).
 Planned work is tracked in [TODO.md](TODO.md).
 
+New to the workspace? Follow the [basic tutorial](docs/basic-tutorial.md) for a short preparation and readiness test.
+
+**Validation status:** The longest documented protein dynamics test is a single 4.0 ps ubiquitin readiness run, including a checkpoint continuation. Shorter readiness checks have also been performed on ubiquitin and villin. The workspace has not been validated for equilibration or long-time production runs, and production execution is not yet connected. A completed test does not establish that a system is equilibrated or scientifically ready for production. See the [4.0 ps results and limitations](outputs/four-ps-continuation.md).
+
 ## Preview
 
 ![Molecular workspace with protein preparation, workflow planning, and live OpenMM temperature, energy, and minimization plots](docs/images/workspace-preview.jpg)
@@ -186,7 +190,7 @@ Each new output directory contains `report.json` (settings, input hashes, engine
 Next priorities (November 7, 2026):
 
 1. Initial two-protein stress checks passed on November 6, including generation/upload, independent output intervals, cancellation, reconnect and downloads; see [results and measured coordinate-output cost](outputs/stress-testing.md). Broader system sizes and longer runs remain untested.
-2. Checkpoint resume passed a short continuation of the saved ubiquitin run. Use a longer relaxation check when evaluating that system for production. Review temperature, potential energy and protein structure across time windows before starting data collection.
+2. A checkpoint continuation extended the saved ubiquitin test to 4 ps; see [the continuation results](outputs/four-ps-continuation.md). Longer relaxation, trajectory-based structural review and independent replicates remain necessary before data collection.
 3. Connect a reviewed production runner with trajectory output, checkpoints, restart controls and reproducibility metadata after those checks pass. Review the charged periodic-system choice before production; ion addition remains deferred.
 4. Record a short walkthrough for the website soon, once the workflow is stable: upload or generate PSF/PDB → inspect the structure → select solvent and a periodic water box → run and follow the measurements → download results. Clearly distinguish recorded playback from a live run, and readiness testing from equilibration or production. Recording is planned, not requested yet.
 
