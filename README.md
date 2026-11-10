@@ -128,6 +128,8 @@ The default request names ubiquitin as an example; it does not identify the uplo
 
 ## Checks
 
+GitHub Actions runs the Python suite and JavaScript checks on pushes and pull requests, installing OpenMM and reporting skipped tests in the job log. The workflow does not install native psfgen, so tests requiring that backend—including the OpenMM/psfgen integration tests—are skipped. A passing workflow does not establish equilibration or production readiness.
+
 Generation offers **Retain supplied hydrogens** (the existing default) or **Rebuild with selected topology** (recommended for hydrogen naming mismatches). Rebuilding removes only input H/D/T atoms from the per-segment psfgen input, then psfgen adds hydrogens for the selected topology, protonation and termini. Original `source.pdb` and selected `protein.pdb` remain intact. The manifest records `options.hydrogens` and every removed input atom. Upload mode never changes the supplied pair. API clients can set `options.hydrogens` to `retain` or `rebuild`; the validation command also accepts `--hydrogens rebuild`.
 
 The reproducible two-protein preparation checks and successful VMD comparisons are documented in [the validation report](outputs/preparation-validation.md). Run matched preparations with:
