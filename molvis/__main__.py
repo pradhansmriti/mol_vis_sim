@@ -6,6 +6,7 @@ import re
 import signal
 import csv
 import io
+import math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from .planning import create_plan
@@ -41,6 +42,10 @@ def example_input():
 
 
 class Handler(BaseHTTPRequestHandler):
+    def error_reply(self, status, code, message):
+        """Return a machine-readable error while preserving the UI's error field."""
+        self.reply(status, json.dumps({'error': message, 'code': code}).encode(), 'application/json')
+
     def reply(self, status, content, mime, filename=None):
         self.send_response(status)
         self.send_header('Content-Type', mime)
@@ -59,13 +64,13 @@ class Handler(BaseHTTPRequestHandler):
                 result = dict(pdb=pair['pdb'], psf=pair['psf'], settings=pair['settings'])
                 self.reply(200, json.dumps(result).encode(), 'application/json')
             except ValueError as exc:
-                self.reply(404, json.dumps({'error': str(exc)}).encode(), 'application/json')
+                self.error_reply(404, 'example_unavailable', str(exc))
             return
         live=re.fullmatch(r'/api/runs/([0-9a-f-]{36})(/measurements\.(?:jsonl|csv))?',self.path)
         if live:
             try: record=read_run(live[1])
             except (ValueError,FileNotFoundError):
-                self.reply(404,b'Run not found','text/plain'); return
+                self.error_reply(404, 'run_not_found', 'Run not found.'); return
             if live[2] and live[2].endswith('.csv'):
                 from .telemetry import FIELDS
                 output=io.StringIO(); writer=csv.DictWriter(output,fieldnames=FIELDS);writer.writeheader();writer.writerows(record['samples'])
@@ -122,18 +127,36 @@ class Handler(BaseHTTPRequestHandler):
         cancel=re.fullmatch(r'/api/runs/([0-9a-f-]{36})/cancel',self.path)
         resume=re.fullmatch(r'/api/runs/([0-9a-f-]{36})/resume',self.path)
         if self.path not in ('/api/plan', '/api/prepare', '/api/compatibility','/api/readiness','/api/runs','/api/example/run') and not (cancel or resume):
-            self.reply(404, b'Not found', 'text/plain')
+            self.error_reply(404, 'route_not_found', 'Not found.')
             return
         # Reject cross-site browser requests to this local service.
         origin = self.headers.get('Origin')
         if origin and origin != f'http://127.0.0.1:{self.server.server_port}':
-            self.reply(403, b'Origin rejected', 'text/plain')
+            self.error_reply(403, 'origin_rejected', 'Origin rejected.')
             return
         try:
             size = int(self.headers.get('Content-Length', '0'))
             if not 0 < size <= 30_000_000:
                 raise ValueError('Request must be between 1 byte and 30 MB.')
-            payload = json.loads(self.rfile.read(size))
+        except ValueError as exc:
+            self.error_reply(400, 'invalid_request_size', str(exc))
+            return
+        try:
+            # Python's JSON decoder accepts NaN and Infinity by default, although
+            # those tokens are not JSON and cannot be safely persisted.
+            def reject_constant(value):
+                raise ValueError(f'Non-finite JSON value {value} is not allowed.')
+            def finite_float(value):
+                result = float(value)
+                if not math.isfinite(result):
+                    raise ValueError('JSON numbers must be finite.')
+                return result
+            payload = json.loads(self.rfile.read(size), parse_constant=reject_constant,
+                                 parse_float=finite_float)
+        except (ValueError, UnicodeError) as exc:
+            self.error_reply(400, 'invalid_json', str(exc))
+            return
+        try:
             if not isinstance(payload, dict):
                 raise ValueError('Request must be an object.')
             if self.path=='/api/readiness': payload['test_dynamics']=True
@@ -149,7 +172,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = actions[self.path](payload)
             self.reply(202 if resume or self.path in ('/api/runs','/api/example/run') else 200, json.dumps(result, allow_nan=False).encode(), 'application/json')
         except (ValueError, TypeError, UnicodeError) as exc:
-            self.reply(400, json.dumps({'error': str(exc)}).encode(), 'application/json')
+            self.error_reply(400, 'invalid_request', str(exc))
 
 
 def main():
