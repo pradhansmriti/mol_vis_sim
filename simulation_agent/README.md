@@ -1,6 +1,6 @@
 # Simulation agent: planning foundation
 
-This is an experimental, provider-independent tool loop for inspecting the active structure and proposing a workflow through the existing local workspace API. It does **not** yet include a model provider, chat interface, persistent session storage, compatibility checks, or simulation execution. A plan is not scientific validation. Production dynamics remain unavailable.
+This is an experimental tool loop for inspecting the active structure and proposing a workflow through the existing local workspace API. It supports OpenAI, OpenRouter, Anthropic and custom OpenAI-compatible endpoints. It does **not** yet include a workspace chat panel, persistent session storage, scientific compatibility checks, or simulation execution. A plan is not scientific validation. Production dynamics remain unavailable.
 
 `WorkspaceContext` is supplied by the application, not the model: the model cannot choose file paths or replace the active PDB/PSF. `PlanningTools` exposes only `inspect_structure` and `propose_workflow`; it rejects other tools and settings. The adapter sends requests only to `http://127.0.0.1:<port>/api/plan` and disables compatibility checks. The workspace supplies defaults for omitted settings; the returned settings must be presented as a proposal and reviewed, not assumed to be the user's choices. Explicit water currently adds no ions or neutralization.
 
@@ -19,3 +19,15 @@ python3 -m unittest discover -s tests/agent -v
 ```
 
 The adapter test exercises the actual planning function with a mocked HTTP transport. It is not a live socket integration test.
+
+## Try the command-line preview
+
+Start the workspace server following the main README, then set the relevant environment variable (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, or, optionally for custom endpoints, `SIMULATION_AGENT_API_KEY`). Do not put credentials in command arguments. For example:
+
+```sh
+python3 -m simulation_agent --provider openrouter --model PROVIDER/MODEL --pdb /path/to/structure.pdb
+```
+
+For a custom OpenAI-compatible endpoint use `--provider custom --base-url http://localhost:11434/v1 --model MODEL`. Remote endpoints require HTTPS; local loopback endpoints may use HTTP. Add `--psf /path/to/prepared.psf` when applicable. Type `/quit` to exit. The CLI holds the session only in memory and prints the agent's response; structured tool observations remain available in the session for application integration.
+
+Before allowing a conversation, the adapter sends a small test request to the chosen provider and checks a tool call and a subsequent tool-result response. Failure blocks the session; changing provider configuration requires a new check. This tests a basic protocol round trip, not the model's scientific accuracy or reliability. The probe can incur provider charges. User messages and structure summaries are sent to the configured endpoint; PDB coordinates and PSF contents are not sent to the model provider. No live provider has yet been verified in this environment.
