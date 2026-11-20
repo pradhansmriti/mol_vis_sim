@@ -11,7 +11,7 @@ New to the workspace? Follow the [basic tutorial](docs/basic-tutorial.md) for a 
 
 ![Molecular workspace with protein preparation, workflow planning, and live OpenMM temperature, energy, and minimization plots](docs/images/workspace-preview.jpg)
 
-Starting ubiquitin structure in its periodic water box, with simulation output from a checkpoint continuation · updated November 7, 2026. This preview is refreshed with interface changes.
+Starting ubiquitin structure in its periodic water box, with simulation output from a checkpoint continuation · captured November 7, 2026. The image predates the experimental assistant panel and needs a fresh capture after visual review.
 
 ## Run locally
 
@@ -122,7 +122,13 @@ The interface shows the absolute server folder after preparation, and the respon
 
 The default root is `<repository>/runs/preparations`, independent of the launch directory. Set `MOLVIS_OUTPUT_DIR` before starting the server to use a different root. The server must have write access. Results are published only when the complete folder has been saved; a write failure returns an error rather than claiming success. Temporary scratch files are removed after each request. Each input file is limited to 5 MB, the request to 30 MB, and topology/parameter uploads to 12 files of each kind. Topology and parameter data are not executed as scripts. The server remains bound to loopback.
 
-The interface supports preparation, planning and structure inspection. It does not interpret natural-language requests or launch production dynamics; bounded OpenMM readiness tests are available. A separate local diagnostic below checks CHARMM parameter loading and bounded vacuum minimization. Live energy and temperature traces are available for bounded readiness runs; production trajectory controls remain future work. A parsed PDB is not a scientifically validated structure. Multiple models, alternate locations, and duplicate atoms require explicit resolution; non-protein components are retained in existing pairs and flagged for review. mmCIF is not yet supported.
+The interface supports preparation, planning and structure inspection. An experimental assistant can inspect a prepared structure and discuss a proposed plan through a user-configured model; it does not perform compatibility checks or launch simulations. Production dynamics are not connected; bounded OpenMM readiness tests are available separately. A separate local diagnostic below checks CHARMM parameter loading and bounded vacuum minimization. Live energy and temperature traces are available for bounded readiness runs; production trajectory controls remain future work. A parsed PDB is not a scientifically validated structure. Multiple models, alternate locations, and duplicate atoms require explicit resolution; non-protein components are retained in existing pairs and flagged for review. mmCIF is not yet supported.
+
+### Experimental planning assistant
+
+Before starting the workspace server, set the API key environment variable for your provider: `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, or `SIMULATION_AGENT_API_KEY` for a custom OpenAI-compatible endpoint. A custom local endpoint can be used without a key if the endpoint permits it. Prepare a PSF/PDB pair in the workspace, then use **Simulation planning assistant** to select a provider, enter its model and, for custom providers, the API base URL. The assistant checks a tool call and tool-result response before enabling chat. A failed check blocks the session and reports an error; changing the model, endpoint, or prepared structure requires reconnecting.
+
+The provider receives conversation text and structure summaries; it does not receive PDB coordinates or PSF contents through the model adapter. Provider requests, including the compatibility probe, can incur charges. The assistant returns proposed settings and tool observations but cannot run the simulation or check OpenMM compatibility. Conversations and keys are held in memory, not saved as session records. The browser implementation and provider adapters have not yet been verified with a live provider. See [the agent documentation](simulation_agent/README.md).
 
 The default request names ubiquitin as an example; it does not identify the uploaded protein. Supply your own ubiquitin PDB to plan that example. Production duration is separate from the optional preparatory equilibration duration. No equilibration is silently added.
 

@@ -14,8 +14,12 @@ from .preparation import prepare, output_root
 from .compatibility import check_compatibility
 from .environment_storage import DOWNLOADS, environment_root
 from .live_runs import start_run, resume_run, read_run, cancel_run, shutdown
+from simulation_agent.chat import ChatController
+from simulation_agent.providers import ProviderConfig, ProviderError
+from simulation_agent.tools import WorkspaceContext
 
 WEB = Path(__file__).resolve().parent.parent / 'web'
+AGENT_SESSIONS = ChatController()
 EXAMPLE_SETTINGS = dict(solvent_model='obc2', salt_molar=0.2, temperature_k=300,
                         timestep_fs=2, dynamics_steps=100)
 
@@ -124,15 +128,20 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(200, (WEB / entry[0]).read_bytes(), entry[1])
 
     def do_POST(self):
+        agent_route = self.path in ('/api/agent/start', '/api/agent/turn', '/api/agent/close')
         cancel=re.fullmatch(r'/api/runs/([0-9a-f-]{36})/cancel',self.path)
         resume=re.fullmatch(r'/api/runs/([0-9a-f-]{36})/resume',self.path)
-        if self.path not in ('/api/plan', '/api/prepare', '/api/compatibility','/api/readiness','/api/runs','/api/example/run') and not (cancel or resume):
+        if self.path not in ('/api/plan', '/api/prepare', '/api/compatibility','/api/readiness','/api/runs','/api/example/run') and not (cancel or resume or agent_route):
             self.error_reply(404, 'route_not_found', 'Not found.')
             return
         # Reject cross-site browser requests to this local service.
         origin = self.headers.get('Origin')
         if origin and origin != f'http://127.0.0.1:{self.server.server_port}':
             self.error_reply(403, 'origin_rejected', 'Origin rejected.')
+            return
+        if agent_route and (origin != f'http://127.0.0.1:{self.server.server_port}' or
+                            self.headers.get('Content-Type', '').split(';', 1)[0].strip().lower() != 'application/json'):
+            self.error_reply(403, 'origin_rejected', 'Agent requests require the local workspace origin and JSON content.')
             return
         try:
             size = int(self.headers.get('Content-Length', '0'))
@@ -168,11 +177,29 @@ class Handler(BaseHTTPRequestHandler):
                 result = cancel_run(cancel[1])
             elif self.path == '/api/example/run':
                 result = start_run(example_input())
+            elif self.path == '/api/agent/start':
+                if set(payload) - {'provider', 'model', 'base_url', 'pdb', 'psf'}:
+                    raise ValueError('Unsupported agent configuration field.')
+                kind = payload.get('provider')
+                env_names = {'openai': 'OPENAI_API_KEY', 'openrouter': 'OPENROUTER_API_KEY',
+                             'anthropic': 'ANTHROPIC_API_KEY', 'custom': 'SIMULATION_AGENT_API_KEY'}
+                if kind not in env_names:
+                    raise ValueError('Choose a supported provider.')
+                config = ProviderConfig(kind, payload.get('model', ''), os.environ.get(env_names[kind], ''), payload.get('base_url', ''))
+                token = AGENT_SESSIONS.start(config, WorkspaceContext(payload.get('pdb', ''), payload.get('psf')))
+                result = {'session': token, 'status': 'ready'}
+            elif self.path == '/api/agent/turn':
+                result = AGENT_SESSIONS.turn(payload.get('session'), payload.get('message'))
+            elif self.path == '/api/agent/close':
+                AGENT_SESSIONS.close(payload.get('session'))
+                result = {'status': 'closed'}
             else:
                 result = actions[self.path](payload)
             self.reply(202 if resume or self.path in ('/api/runs','/api/example/run') else 200, json.dumps(result, allow_nan=False).encode(), 'application/json')
         except (ValueError, TypeError, UnicodeError) as exc:
             self.error_reply(400, 'invalid_request', str(exc))
+        except ProviderError as exc:
+            self.error_reply(400, exc.code, str(exc))
 
 
 def main():

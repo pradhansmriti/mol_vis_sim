@@ -34,6 +34,12 @@
   </div>
   <p id="guide-status" role="status"></p>
 </section>
+<section class="agent-panel" aria-labelledby="agent-title"><div class="section-head"><h2 id="agent-title">Simulation planning assistant</h2><span class="badge">Experimental · planning only</span></div>
+<p class="muted">Choose your model here, then <a href="#plan-form">prepare a structure below</a> before connecting. Messages and structure summaries are sent to the selected provider; raw coordinates and PSF are not sent to the model. Provider requests may incur charges.</p>
+<div class="agent-config"><label>Provider<select id="agent-provider"><option value="openai">OpenAI</option><option value="openrouter">OpenRouter</option><option value="anthropic">Anthropic</option><option value="custom">Custom OpenAI-compatible</option></select></label><label>Model<input id="agent-model" type="text" placeholder="Enter model name" autocomplete="off"></label><label id="agent-url-field" hidden>API base URL<input id="agent-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="off"></label></div>
+<p class="muted">Set the provider API key in the server environment before starting the workspace. Custom endpoints use SIMULATION_AGENT_API_KEY if needed. Local endpoint URLs may use HTTP; remote URLs require HTTPS. See the agent README for key names.</p>
+<button id="agent-connect" type="button">Check model and connect</button> <button id="agent-disconnect" type="button" disabled>Disconnect</button><p id="agent-status" role="status">Prepare a structure, then check model tool support.</p>
+<div id="agent-messages" aria-live="polite"></div><label for="agent-prompt">Ask about a simulation plan</label><textarea id="agent-prompt" rows="3" disabled placeholder="For example: inspect this structure and plan a test at 300 K"></textarea><button id="agent-send" type="button" disabled>Send</button><p class="muted">The assistant proposes plans only. It does not check force-field compatibility or run a simulation. Review its settings and evidence.</p></section>
 <form id="plan-form"><div class="request"><label for="request">Simulation goal <span class="muted">Saved as context; settings below define the plan.</span></label><input id="request" value="Run ubiquitin for 10 ps in implicit solvent at 300 K."></div>
 <section class="preparation">
 <div class="section-head"><h2>1. Prepare simulation files</h2><span class="badge">No VMD required</span></div>

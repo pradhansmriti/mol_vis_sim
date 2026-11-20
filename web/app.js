@@ -23,6 +23,7 @@ const preparationInputs = new Set(['pdb','psf','topologies','parameters','histid
 function settingsChanged(event) {
   if (structureControls.has(event.target.id)) return;
   if (preparationInputs.has(event.target.id)) {
+    resetAgent('Structure inputs changed. Prepare files and reconnect the assistant.');
     savedPreview = null;
     proteinPreview = null;
     prepared = null; $('prep-downloads').hidden = true;
@@ -54,6 +55,7 @@ async function readFiles(id) {
   return Promise.all([...$(id).files].map(async file => ({name:file.name, text:await readFile(file,id)})));
 }
 $('prepare').addEventListener('click', async () => {
+  resetAgent('Preparation changed. Reconnect the assistant when files are ready.');
   $('error').textContent = ''; prepared = null; invalidate();
   $('prep-error').hidden = true;
   $('prep-downloads').hidden = true;
@@ -757,3 +759,90 @@ function startGuide() {
     }
   });
 }
+
+// The agent session is bound to one prepared structure and one checked model.
+let agentSession = null, agentGeneration = 0, agentBusy = false;
+async function agentRequest(path, body, options = {}) {
+  const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body), ...options});
+  const result = await response.json();
+  if (!response.ok) throw Error(result.error || 'The assistant request failed.');
+  return result;
+}
+function closeAgentSession(token) {
+  if (token) agentRequest('/api/agent/close', {session:token}, {keepalive:true}).catch(() => {});
+}
+function resetAgent(message) {
+  agentGeneration++;
+  const previous = agentSession;
+  agentSession = null;
+  agentBusy = false;
+  closeAgentSession(previous);
+  $('agent-prompt').disabled = true;
+  $('agent-send').disabled = true;
+  $('agent-disconnect').disabled = true;
+  $('agent-connect').disabled = false;
+  $('agent-status').textContent = message;
+  $('agent-messages').replaceChildren();
+}
+for (const id of ['agent-provider', 'agent-model', 'agent-url']) {
+  $(id).addEventListener('input', () => {
+    resetAgent('Configuration changed. Check model tool support again.');
+    $('agent-url-field').hidden = $('agent-provider').value !== 'custom';
+  });
+  $(id).addEventListener('change', () => {
+    $('agent-url-field').hidden = $('agent-provider').value !== 'custom';
+  });
+}
+$('agent-disconnect').addEventListener('click', () => resetAgent('Disconnected.'));
+$('agent-connect').addEventListener('click', async () => {
+  resetAgent('Checking model tool support…');
+  if (!prepared) { $('agent-status').textContent = 'Prepare or upload a PSF/PDB pair first.'; return; }
+  const generation = agentGeneration, pair = prepared;
+  $('agent-connect').disabled = true;
+  try {
+    const result = await agentRequest('/api/agent/start', {provider:$('agent-provider').value,
+      model:$('agent-model').value.trim(), base_url:$('agent-provider').value === 'custom' ? $('agent-url').value.trim() : '',
+      pdb:pair.pdb, psf:pair.psf});
+    if (generation !== agentGeneration || pair !== prepared) { closeAgentSession(result.session); return; }
+    agentSession = result.session;
+    $('agent-status').textContent = 'Tool check passed. Ask a planning question below.';
+    $('agent-prompt').disabled = false; $('agent-send').disabled = false;
+    $('agent-disconnect').disabled = false;
+  } catch (error) {
+    if (generation === agentGeneration) $('agent-status').textContent = `Cannot connect: ${error.message}`;
+  } finally {
+    if (generation === agentGeneration) $('agent-connect').disabled = false;
+  }
+});
+function appendAgentText(label, text) {
+  const block = document.createElement('div'), title = document.createElement('strong'), body = document.createElement('p');
+  title.textContent = label; body.textContent = text; block.append(title, body);
+  $('agent-messages').append(block);
+}
+$('agent-send').addEventListener('click', async () => {
+  const text = $('agent-prompt').value.trim();
+  if (!agentSession || agentBusy || !text) return;
+  const token = agentSession, generation = agentGeneration;
+  agentBusy = true; $('agent-send').disabled = true; $('agent-prompt').disabled = true;
+  $('agent-status').textContent = 'Thinking…';
+  try {
+    const result = await agentRequest('/api/agent/turn', {session:token, message:text});
+    if (generation !== agentGeneration) return;
+    appendAgentText('You', text); appendAgentText('Assistant', result.text || 'No response text returned.');
+    for (const observation of result.observations || []) {
+      const detail = document.createElement('details'), summary = document.createElement('summary'), pre = document.createElement('pre');
+      summary.textContent = `Tool observation: ${observation.name}`;
+      try { pre.textContent = JSON.stringify(JSON.parse(observation.content), null, 2); }
+      catch { pre.textContent = observation.content; }
+      detail.append(summary, pre); $('agent-messages').append(detail);
+    }
+    $('agent-prompt').value = '';
+    $('agent-status').textContent = result.status === 'limit_reached' ? 'Tool-call limit reached. Review the observations.' : 'Ready.';
+  } catch (error) {
+    if (generation === agentGeneration) $('agent-status').textContent = `Could not complete the request: ${error.message}`;
+  } finally {
+    if (generation === agentGeneration) { agentBusy = false; $('agent-send').disabled = false; $('agent-prompt').disabled = false; }
+  }
+});
+window.addEventListener('pagehide', () => closeAgentSession(agentSession));
